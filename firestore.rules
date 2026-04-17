@@ -2,6 +2,223 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function validUserFields() {
+      return request.resource.data.keys().hasOnly([
+        'name',
+        'email',
+        'plan',
+        'credits',
+        'createdAt',
+        'updatedAt'
+      ]);
+    }
+
+    function validUserProfile(userId) {
+      return isOwner(userId)
+        && validUserFields()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.email is string
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.email.size() <= 254
+        && request.resource.data.plan == 'free'
+        && request.resource.data.credits == 3
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validPodcastKeys() {
+      return request.resource.data.keys().hasOnly([
+        'id',
+        'userId',
+        'ownerId',
+        'title',
+        'topic',
+        'audience',
+        'format',
+        'language',
+        'durationMinutes',
+        'tone',
+        'keywords',
+        'avoid',
+        'description',
+        'status',
+        'host',
+        'guest',
+        'speakers',
+        'script',
+        'videoSettings',
+        'cloningPreset',
+        'currentJobId',
+        'audioUrl',
+        'videoUrl',
+        'posterUrl',
+        'thumbnailUrl',
+        'durationSeconds',
+        'creditsSpent',
+        'createdAt',
+        'updatedAt'
+      ]);
+    }
+
+    function validPodcastOwner() {
+      return signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid;
+    }
+
+    function validPodcastContent() {
+      return validPodcastKeys()
+        && validPodcastOwner()
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 1
+        && request.resource.data.title.size() <= 220
+        && request.resource.data.topic is string
+        && request.resource.data.topic.size() >= 3
+        && request.resource.data.topic.size() <= 200
+        && request.resource.data.audience is string
+        && request.resource.data.audience.size() >= 2
+        && request.resource.data.audience.size() <= 200
+        && request.resource.data.format in [
+          'educational',
+          'casual',
+          'debate',
+          'interview',
+          'storytelling',
+          'news'
+        ]
+        && request.resource.data.language in [
+          'tamil',
+          'hindi',
+          'telugu',
+          'malayalam',
+          'kannada',
+          'english',
+          'spanish',
+          'french',
+          'german'
+        ]
+        && request.resource.data.durationMinutes is int
+        && request.resource.data.durationMinutes >= 1
+        && request.resource.data.durationMinutes <= 15
+        && request.resource.data.tone is string
+        && request.resource.data.tone.size() >= 1
+        && request.resource.data.tone.size() <= 80
+        && request.resource.data.keywords is list
+        && request.resource.data.keywords.size() <= 20
+        && request.resource.data.avoid is string
+        && request.resource.data.avoid.size() <= 500
+        && request.resource.data.status in [
+          'draft',
+          'scripting',
+          'script_ready',
+          'configuring',
+          'queued',
+          'generating',
+          'completed',
+          'failed',
+          'canceled'
+        ]
+        && request.resource.data.creditsSpent is int
+        && request.resource.data.creditsSpent >= 0
+        && (!('cloningPreset' in request.resource.data)
+          || request.resource.data.cloningPreset in [
+            'full_ai',
+            'clone_host',
+            'clone_guest',
+            'clone_both',
+            'clone_host_voice',
+            'clone_guest_avatar',
+            'custom'
+          ]);
+    }
+
+    function validJobKeys() {
+      return request.resource.data.keys().hasOnly([
+        'id',
+        'userId',
+        'podcastId',
+        'retryJobId',
+        'status',
+        'stage',
+        'stages',
+        'progress',
+        'errorMessage',
+        'outputUrl',
+        'outputStoragePath',
+        'posterUrl',
+        'durationSeconds',
+        'startedAt',
+        'completedAt',
+        'createdAt',
+        'updatedAt'
+      ]);
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if validUserProfile(userId);
+      allow update: if isOwner(userId)
+        && validUserFields()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'updatedAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.plan == resource.data.plan
+        && request.resource.data.credits == resource.data.credits
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+    }
+
+    match /podcasts/{podcastId} {
+      allow get: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow list: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if validPodcastContent()
+        && request.resource.data.id == podcastId
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if signedIn()
+        && resource.data.ownerId == request.auth.uid
+        && validPodcastContent()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /jobs/{jobId} {
+      allow get: if signedIn() && resource.data.userId == request.auth.uid;
+      allow list: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if false;
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && validJobKeys()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'updatedAt'
+        ])
+        && request.resource.data.status == 'canceled'
+        && (request.resource.data.updatedAt == request.time
+          || request.resource.data.updatedAt is string);
+      allow delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
