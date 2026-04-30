@@ -7,12 +7,12 @@ export type SpeakerGender = "male" | "female";
 export interface Voice {
   id: string;
   name: string;
-  provider: "elevenlabs" | "sarvam" | "openai" | "custom";
+  provider: "elevenlabs" | "sarvam" | "gemini" | "openai" | "custom";
   mode: VoiceMode;
   gender: SpeakerGender;
   languageCode: string;
   accent?: string;
-  previewUrl?: string;
+  previewUrl?: string | null;
   externalVoiceId?: string;
 }
 
@@ -20,6 +20,7 @@ export interface SpeakerConfig {
   id: SpeakerRole;
   name: string;
   role: SpeakerRole;
+  gender?: SpeakerGender;
   voiceMode: VoiceMode;
   voiceId?: string;
   voice?: Voice;

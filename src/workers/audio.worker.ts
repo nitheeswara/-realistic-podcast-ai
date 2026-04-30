@@ -3,12 +3,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { FieldValue } from "firebase-admin/firestore";
 import ffmpegStatic from "ffmpeg-static";
 
 import { serverEnv } from "@/config/env";
 import { voiceOptions } from "@/lib/podcast/constants";
-import { toSarvamTargetLanguageCode } from "@/lib/podcast/provider-catalog";
-import { adminStorage } from "@/lib/server/firebase-admin";
+import { isSarvamLanguage, toSarvamTargetLanguageCode } from "@/lib/podcast/provider-catalog";
+import { adminDb } from "@/lib/server/firebase-admin";
 import type { PodcastScript, ScriptSpeakerId, ScriptTurn } from "@/types/script";
 import type { SpeakerConfig, Voice } from "@/types/voice";
 
@@ -23,10 +24,12 @@ export interface TurnAudioAsset {
   turnId: string;
   speakerId: ScriptSpeakerId;
   text: string;
+  segmentIndex: number;
+  turnIndex: number;
   audioUrl: string;
   storagePath?: string;
   durationSeconds: number;
-  provider: Voice["provider"] | "placeholder";
+  provider: AudioAssetProvider;
   normalized: boolean;
 }
 
@@ -39,6 +42,106 @@ interface SynthesizedAudio {
   data: ArrayBuffer;
   contentType: string;
 }
+
+type AudioAssetProvider = Voice["provider"] | "unrealspeech" | "placeholder";
+
+const audioProviders = new Set<AudioAssetProvider>([
+  "elevenlabs",
+  "sarvam",
+  "gemini",
+  "unrealspeech",
+  "openai",
+  "custom",
+  "placeholder",
+]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isScriptSpeakerId = (value: unknown): value is ScriptSpeakerId =>
+  value === "host" || value === "guest";
+
+const isAudioProvider = (value: unknown): value is AudioAssetProvider =>
+  typeof value === "string" && audioProviders.has(value as AudioAssetProvider);
+
+const isRealAudioUrl = (url: string): boolean =>
+  url.startsWith("http://") || url.startsWith("https://");
+
+const parseExistingAudioAsset = (value: unknown): TurnAudioAsset | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const turnId = value.turnId;
+  const speakerId = value.speakerId;
+  const text = value.text;
+  const segmentIndex = value.segmentIndex;
+  const turnIndex = value.turnIndex;
+  const audioUrl = value.audioUrl;
+  const storagePath = value.storagePath;
+  const durationSeconds = value.durationSeconds;
+  const provider = value.provider;
+  const normalized = value.normalized;
+
+  if (
+    typeof turnId !== "string" ||
+    !isScriptSpeakerId(speakerId) ||
+    typeof audioUrl !== "string" ||
+    typeof durationSeconds !== "number" ||
+    !Number.isFinite(durationSeconds)
+  ) {
+    return null;
+  }
+
+  return {
+    turnId,
+    speakerId,
+    text: typeof text === "string" ? text : "",
+    segmentIndex: typeof segmentIndex === "number" && Number.isFinite(segmentIndex) ? segmentIndex : 0,
+    turnIndex: typeof turnIndex === "number" && Number.isFinite(turnIndex) ? turnIndex : 0,
+    audioUrl,
+    storagePath: typeof storagePath === "string" ? storagePath : undefined,
+    durationSeconds,
+    provider: isAudioProvider(provider) ? provider : "placeholder",
+    normalized: typeof normalized === "boolean" ? normalized : false,
+  };
+};
+
+const parseExistingAudioAssets = (value: unknown): TurnAudioAsset[] =>
+  Array.isArray(value)
+    ? value.map(parseExistingAudioAsset).filter((asset): asset is TurnAudioAsset => asset !== null)
+    : [];
+
+const getExistingAudioAssets = async (podcastId: string, jobId: string): Promise<TurnAudioAsset[]> => {
+  const jobSnapshot = await adminDb.collection("jobs").doc(jobId).get();
+  const jobAssets = parseExistingAudioAssets(jobSnapshot.get("audioAssets") as unknown);
+
+  if (jobAssets.length > 0) {
+    return jobAssets;
+  }
+
+  const podcastSnapshot = await adminDb.collection("podcasts").doc(podcastId).get();
+  return parseExistingAudioAssets(podcastSnapshot.get("audioAssets") as unknown);
+};
+
+const persistAudioAssets = async (podcastId: string, jobId: string, assets: TurnAudioAsset[]) => {
+  await Promise.all([
+    adminDb.collection("jobs").doc(jobId).set(
+      {
+        audioAssets: assets,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    ),
+    adminDb.collection("podcasts").doc(podcastId).set(
+      {
+        audioAssets: assets,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ]);
+};
 
 const getSpeakerVoice = (speakers: SpeakerConfig[], speakerId: ScriptSpeakerId) => {
   const speaker = speakers.find((item) => item.id === speakerId || item.role === speakerId);
@@ -135,7 +238,61 @@ const normalizeAndTrimAudio = async (
       data: output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength),
       contentType: "audio/mpeg",
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `Audio normalization failed for ${turnId}:`,
+      error instanceof Error ? error.message : error
+    );
+    return audio;
+  } finally {
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  }
+};
+
+const ensureMp3Audio = async (
+  audio: SynthesizedAudio,
+  turnId: string
+): Promise<SynthesizedAudio> => {
+  if (audio.contentType === "audio/mpeg") {
+    return audio;
+  }
+
+  let tempDir: string | null = null;
+
+  try {
+    tempDir = await mkdtemp(join(tmpdir(), "convert-"));
+    const inputPath = join(tempDir, `${turnId}.${contentTypeToExtension(audio.contentType)}`);
+    const outputPath = join(tempDir, `${turnId}.mp3`);
+    await writeFile(inputPath, Buffer.from(audio.data));
+    await runFfmpeg([
+      resolveFfmpegPath(),
+      "-y",
+      "-i",
+      inputPath,
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      "-ar",
+      "44100",
+      "-ac",
+      "1",
+      outputPath,
+    ]);
+    const mp3Buffer = await readFile(outputPath);
+    console.log(`Converted WAV to MP3 for turn ${turnId}`);
+
+    return {
+      data: mp3Buffer.buffer.slice(mp3Buffer.byteOffset, mp3Buffer.byteOffset + mp3Buffer.byteLength),
+      contentType: "audio/mpeg",
+    };
+  } catch (error) {
+    console.warn(
+      `WAV to MP3 conversion failed for ${turnId}:`,
+      error instanceof Error ? error.message : error
+    );
     return audio;
   } finally {
     if (tempDir) {
@@ -148,23 +305,17 @@ const uploadAudio = async (
   podcastId: string,
   jobId: string,
   turnId: string,
-  contentType: string,
+  _contentType: string,
   data: ArrayBuffer
 ) => {
+  const { uploadAudioBuffer } = await import("@/lib/server/storage");
   const storagePath = `generated/${podcastId}/${jobId}/audio/${turnId}.mp3`;
-  const file = adminStorage.bucket().file(storagePath);
-  await file.save(Buffer.from(data), {
-    contentType,
-    metadata: {
-      cacheControl: "private, max-age=31536000",
-    },
-  });
-  const [signedUrl] = await file.getSignedUrl({
-    action: "read",
-    expires: Date.now() + 1000 * 60 * 60 * 24 * 7,
-  });
+  const signedUrl = await uploadAudioBuffer(Buffer.from(data), storagePath);
 
-  return { storagePath, signedUrl };
+  return {
+    storagePath,
+    signedUrl,
+  };
 };
 
 const synthesizeWithElevenLabs = async (
@@ -207,11 +358,21 @@ const synthesizeWithElevenLabs = async (
   };
 };
 
+const sarvamSpeakerForVoice = (voice: Voice) => {
+  const speaker = voice.externalVoiceId?.trim().toLowerCase();
+
+  if (speaker === "arvind" || speaker === "anushka") {
+    return speaker;
+  }
+
+  return voice.gender === "male" ? "arvind" : "anushka";
+};
+
 const synthesizeWithSarvam = async (
   voice: Voice,
   text: string
 ): Promise<SynthesizedAudio | null> => {
-  if (!serverEnv.SARVAM_API_KEY) {
+  if (!serverEnv.SARVAM_API_KEY || !isSarvamLanguage(voice.languageCode)) {
     return null;
   }
 
@@ -224,13 +385,12 @@ const synthesizeWithSarvam = async (
     body: JSON.stringify({
       inputs: [text],
       target_language_code: toSarvamTargetLanguageCode(voice.languageCode),
-      speaker: voice.externalVoiceId ?? "anushka",
-      pitch: 0,
-      pace: 1,
-      loudness: 1,
-      speech_sample_rate: 22050,
+      speaker: sarvamSpeakerForVoice(voice),
+      pace: 1.65,
+      loudness: 1.5,
+      speech_sample_rate: 8000,
       enable_preprocessing: true,
-      model: "bulbul:v1",
+      model: "bulbul:v2",
     }),
   });
 
@@ -260,66 +420,265 @@ const synthesizeWithSarvam = async (
   };
 };
 
+const synthesizeWithUnrealSpeech = async (
+  text: string,
+  speakerId: string
+): Promise<SynthesizedAudio | null> => {
+  const apiKey = process.env.UNREAL_SPEECH_API_KEY;
+
+  if (!apiKey) {
+    console.warn("UNREAL_SPEECH_API_KEY not set");
+    return null;
+  }
+
+  const voiceId = speakerId === "host" ? "Dan" : "Scarlett";
+
+  try {
+    const res = await fetch("https://api.v7.unrealspeech.com/speech", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        Text: text,
+        VoiceId: voiceId,
+        Bitrate: "128k",
+        Speed: "0",
+        Pitch: "1",
+        TimestampType: "word",
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`Unreal Speech HTTP ${res.status}:`, errText.slice(0, 200));
+      return null;
+    }
+
+    const data = await res.json() as { OutputUri?: string };
+    const audioUrl = data.OutputUri;
+
+    if (!audioUrl) {
+      console.warn("Unreal Speech returned no OutputUri:", JSON.stringify(data));
+      return null;
+    }
+
+    const audioResponse = await fetch(audioUrl);
+
+    if (!audioResponse.ok) {
+      console.warn("Failed to download Unreal Speech audio:", audioResponse.status);
+      return null;
+    }
+
+    const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
+    console.log(
+      `Unreal Speech success for ${speakerId} (${voiceId}): ${audioBuffer.length} bytes`
+    );
+
+    return {
+      data: audioBuffer.buffer.slice(audioBuffer.byteOffset, audioBuffer.byteOffset + audioBuffer.byteLength),
+      contentType: "audio/mpeg",
+    };
+  } catch (error) {
+    console.warn("Unreal Speech error:", error instanceof Error ? error.message : error);
+    return null;
+  }
+};
+
 const synthesizeTurn = async (
   input: AudioWorkerInput,
-  turn: ScriptTurn
+  turn: ScriptTurn,
+  segmentIndex: number,
+  turnIndex: number
 ): Promise<TurnAudioAsset> => {
   const voice = getSpeakerVoice(input.speakers, turn.speakerId);
   const provider = voice?.provider ?? "placeholder";
-  const rawAudio =
-    voice?.provider === "elevenlabs"
+  let rawAudio =
+    await synthesizeWithUnrealSpeech(turn.text, turn.speakerId) ??
+    (voice?.provider === "elevenlabs"
       ? await synthesizeWithElevenLabs(voice, turn.text)
-      : voice?.provider === "sarvam"
-        ? await synthesizeWithSarvam(voice, turn.text)
-        : null;
+      : null) ??
+    (voice?.provider === "sarvam"
+      ? await synthesizeWithSarvam(voice, turn.text)
+      : null);
+  let assetProvider: AudioAssetProvider = rawAudio ? "unrealspeech" : provider;
 
-  if (rawAudio) {
-    const audioData = await normalizeAndTrimAudio(rawAudio, turn.id);
+  if (!rawAudio) {
+    console.warn(`All TTS providers failed for turn ${turn.id}, generating silence`);
+    const duration = estimatedDuration(turn);
+    let silenceTempDir: string | null = null;
+
+    try {
+      silenceTempDir = await mkdtemp(join(tmpdir(), "silence-"));
+      const silentPath = join(silenceTempDir, "silent.mp3");
+      await runFfmpeg([
+        resolveFfmpegPath(),
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=44100:cl=mono",
+        "-t",
+        String(duration),
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
+        silentPath,
+      ]);
+      const silentBuf = await readFile(silentPath);
+      rawAudio = {
+        data: silentBuf.buffer.slice(
+          silentBuf.byteOffset,
+          silentBuf.byteOffset + silentBuf.byteLength
+        ),
+        contentType: "audio/mpeg",
+      };
+      console.log(`Generated silence for turn ${turn.id}: ${duration}s`);
+    } catch (silenceErr) {
+      console.error(
+        "Even silence generation failed:",
+        silenceErr instanceof Error ? silenceErr.message : silenceErr
+      );
+      return {
+        turnId: turn.id,
+        speakerId: turn.speakerId,
+        text: turn.text,
+        segmentIndex,
+        turnIndex,
+        audioUrl: "",
+        durationSeconds: estimatedDuration(turn),
+        provider: "placeholder",
+        normalized: false,
+      };
+    } finally {
+      if (silenceTempDir) {
+        await rm(silenceTempDir, { recursive: true, force: true });
+      }
+    }
+
+    assetProvider = "placeholder";
+  }
+
+  const audioData = await normalizeAndTrimAudio(rawAudio, turn.id);
+  const finalAudio = await ensureMp3Audio(audioData, turn.id);
+
+  try {
     const uploaded = await uploadAudio(
       input.podcastId,
       input.jobId,
       turn.id,
-      audioData.contentType,
-      audioData.data
+      finalAudio.contentType,
+      finalAudio.data
     );
 
     return {
       turnId: turn.id,
       speakerId: turn.speakerId,
       text: turn.text,
+      segmentIndex,
+      turnIndex,
       audioUrl: uploaded.signedUrl,
       storagePath: uploaded.storagePath,
       durationSeconds: estimatedDuration(turn),
-      provider,
-      normalized: audioData.contentType === "audio/mpeg",
+      provider: assetProvider,
+      normalized: finalAudio.contentType === "audio/mpeg",
+    };
+  } catch (uploadError: unknown) {
+    console.error(
+      `Upload failed for turn ${turn.id}:`,
+      uploadError instanceof Error ? uploadError.message : uploadError
+    );
+
+    return {
+      turnId: turn.id,
+      speakerId: turn.speakerId,
+      text: turn.text,
+      segmentIndex,
+      turnIndex,
+      audioUrl: "",
+      durationSeconds: estimatedDuration(turn),
+      provider: "placeholder",
+      normalized: false,
     };
   }
-
-  return {
-    turnId: turn.id,
-    speakerId: turn.speakerId,
-    text: turn.text,
-    audioUrl: `phase2://audio/${input.jobId}/${turn.id}.mp3`,
-    durationSeconds: estimatedDuration(turn),
-    provider: "placeholder",
-    normalized: true,
-  };
 };
 
 export const runAudioWorker = async (
   input: AudioWorkerInput,
   onTurnComplete?: (completed: number, total: number) => Promise<void>
 ): Promise<AudioWorkerResult> => {
-  const turns = input.script.segments.flatMap((segment) => segment.turns);
+  const totalTurns = input.script.segments.reduce(
+    (total, segment) => total + segment.turns.length,
+    0
+  );
+  const existingAssets = await getExistingAudioAssets(input.podcastId, input.jobId);
   const assets: TurnAudioAsset[] = [];
 
-  for (const turn of turns) {
-    const asset = await synthesizeTurn(input, turn);
-    assets.push(asset);
+  for (const [segmentIndex, segment] of input.script.segments.entries()) {
+    for (const [turnIndex, turn] of segment.turns.entries()) {
+      try {
+        const existing = existingAssets.find((asset) => asset.turnId === turn.id);
+        const asset = existing && isRealAudioUrl(existing.audioUrl)
+          ? {
+              ...existing,
+              speakerId: turn.speakerId,
+              text: turn.text,
+              segmentIndex,
+              turnIndex,
+            }
+          : await synthesizeTurn(input, turn, segmentIndex, turnIndex);
+        const nextAssets = [...assets, asset];
 
-    if (onTurnComplete) {
-      await onTurnComplete(assets.length, turns.length);
+        await persistAudioAssets(input.podcastId, input.jobId, nextAssets);
+        assets.push(asset);
+        console.log(
+          `Audio done for turn ${turn.id}: ${asset.provider} -> ${asset.audioUrl.slice(0, 60)}`
+        );
+      } catch (turnError: unknown) {
+        console.error(
+          `Turn ${turn.id} failed completely:`,
+          turnError instanceof Error ? turnError.message : turnError
+        );
+        const failedAsset: TurnAudioAsset = {
+          turnId: turn.id,
+          speakerId: turn.speakerId,
+          text: turn.text,
+          segmentIndex,
+          turnIndex,
+          audioUrl: "",
+          durationSeconds: estimatedDuration(turn),
+          provider: "placeholder",
+          normalized: false,
+        };
+        const nextAssets = [...assets, failedAsset];
+
+        try {
+          await persistAudioAssets(input.podcastId, input.jobId, nextAssets);
+        } catch (persistError) {
+          console.warn(
+            `Persisting failed asset for turn ${turn.id} also failed:`,
+            persistError instanceof Error ? persistError.message : persistError
+          );
+        }
+
+        assets.push(failedAsset);
+      }
+
+      if (onTurnComplete) {
+        await onTurnComplete(assets.length, totalTurns);
+      }
     }
+  }
+
+  const validAssets = assets.filter((asset) => asset.audioUrl.length > 0);
+  console.log(`Audio complete: ${validAssets.length}/${assets.length} turns have audio`);
+
+  if (validAssets.length === 0) {
+    throw new Error(
+      "Audio generation failed for all turns. Check UNREAL_SPEECH_API_KEY and Cloudinary config in .env.local"
+    );
   }
 
   return {
@@ -327,4 +686,3 @@ export const runAudioWorker = async (
     durationSeconds: assets.reduce((total, asset) => total + asset.durationSeconds, 0),
   };
 };
-

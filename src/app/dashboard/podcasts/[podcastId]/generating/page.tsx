@@ -2,35 +2,20 @@
 
 import { doc, getDoc, onSnapshot, updateDoc } from "firebase/firestore";
 import { motion } from "framer-motion";
-import { AlertTriangle, ArrowRight, Loader2, RefreshCcw, SquareX } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { GenerationJobTracker } from "@/components/generation-progress/GenerationJobTracker";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { db } from "@/config/firebase-client";
 import { useAuth } from "@/hooks/useAuth";
-import { jobStages } from "@/lib/podcast/constants";
 import { generationJobSchema } from "@/lib/podcast/schemas";
-import { cn } from "@/lib/utils";
-import type { GenerationJob, JobStage, StageProgress } from "@/types/jobs";
+import type { GenerationJob, JobStage } from "@/types/jobs";
 
 const getParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value;
-
-const stageLabels: Record<JobStage, string> = {
-  audio: "Audio synthesis",
-  lipsync: "Lip sync",
-  movement: "Movement pass",
-  compose: "Compose",
-  export: "Export",
-};
-
-const fallbackProgress: StageProgress = {
-  status: "queued",
-  progress: 0,
-};
 
 export default function GeneratingPage() {
   const params = useParams();
@@ -62,14 +47,14 @@ export default function GeneratingPage() {
         : null;
 
       if (data?.ownerId !== user.uid) {
-        setMessage("This podcast belongs to another account.");
+        setMessage("We could not open this render from your account.");
         return;
       }
 
       if (typeof data?.currentJobId === "string") {
         setJobId(data.currentJobId);
       } else {
-        setMessage("No active generation job found.");
+        setMessage("No active render is running yet. You can start again from studio settings.");
       }
     };
 
@@ -85,20 +70,20 @@ export default function GeneratingPage() {
       doc(db, "jobs", jobId),
       (snapshot) => {
         if (!snapshot.exists()) {
-          setMessage("Generation job not found.");
+          setMessage("We could not find this render job. Please retry from studio settings.");
           return;
         }
 
         const parsed = generationJobSchema.safeParse({ id: snapshot.id, ...snapshot.data() });
 
         if (!parsed.success) {
-          setMessage("Generation job data is incomplete.");
+          setMessage("The render update is taking longer than expected. AI is busy, retrying...");
           return;
         }
 
         setJob(parsed.data);
       },
-      () => setMessage("Could not subscribe to generation progress.")
+      () => setMessage("Live progress paused for a moment. AI is busy, retrying...")
     );
 
     return unsubscribe;
@@ -117,7 +102,7 @@ export default function GeneratingPage() {
         updatedAt: new Date().toISOString(),
       });
     } catch {
-      setMessage("Could not cancel the job.");
+      setMessage("Could not cancel just now. Please try again in a moment.");
     } finally {
       setBusyAction(null);
     }
@@ -159,13 +144,12 @@ export default function GeneratingPage() {
         router.replace(`/dashboard/podcasts/${podcastId}/generating?jobId=${nextJobId}`);
       }
     } catch {
-      setMessage("Could not retry generation.");
+      setMessage("AI is busy, retrying may work in a moment.");
     } finally {
       setBusyAction(null);
     }
   };
 
-  const activeStage = job?.stage;
   const completed = job?.status === "completed";
 
   const statusCopy = useMemo(() => {
@@ -218,16 +202,6 @@ export default function GeneratingPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!job || job.status === "completed" || busyAction === "cancel"}
-              onClick={cancelJob}
-              className="h-11 rounded-[8px] border-white/10 bg-white/5 text-sm text-white hover:bg-white/10"
-            >
-              {busyAction === "cancel" ? <Loader2 className="size-4 animate-spin" /> : <SquareX className="size-4" />}
-              Cancel
-            </Button>
             {completed ? (
               <Button asChild className="h-11 rounded-[8px] bg-amber-300 px-5 text-sm font-semibold text-gray-950 hover:bg-amber-200">
                 <Link href={`/dashboard/podcasts/${podcastId}/result`}>
@@ -239,74 +213,13 @@ export default function GeneratingPage() {
           </div>
         </motion.header>
 
-        {message ? (
-          <p className="rounded-[8px] border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-            {message}
-          </p>
-        ) : null}
-
-        <Card className="rounded-[8px] border border-white/10 bg-white/[0.04] text-white ring-1 ring-white/5">
-          <CardHeader>
-            <CardTitle className="text-2xl text-white">Pipeline stages</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            {jobStages.map((stage) => {
-              const stageProgress = job?.stages[stage] ?? fallbackProgress;
-              const active = activeStage === stage && job?.status === "running";
-              const failed = stageProgress.status === "failed";
-
-              return (
-                <motion.div
-                  key={stage}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={cn(
-                    "rounded-[8px] border p-4",
-                    active ? "border-amber-300/40 bg-amber-300/10" : "border-white/10 bg-gray-950/50",
-                    failed && "border-red-300/40 bg-red-500/10"
-                  )}
-                >
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-white">{stageLabels[stage]}</p>
-                      <p className="mt-1 text-xs capitalize text-gray-400">{stageProgress.status}</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {active ? <span className="size-2 animate-pulse rounded-full bg-amber-300" /> : null}
-                      <span className="text-sm text-gray-300">{Math.round(stageProgress.progress)}%</span>
-                    </div>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-[8px] bg-white/10">
-                    <motion.div
-                      className={cn("h-full rounded-[8px]", failed ? "bg-red-300" : "bg-amber-300")}
-                      initial={false}
-                      animate={{ width: `${stageProgress.progress}%` }}
-                      transition={{ duration: 0.45, ease: "easeOut" }}
-                    />
-                  </div>
-                  {stageProgress.errorMessage ? (
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-red-300/20 bg-red-500/10 p-3 text-sm text-red-100">
-                      <span className="flex items-center gap-2">
-                        <AlertTriangle className="size-4" />
-                        {stageProgress.errorMessage}
-                      </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => void retryJob(stage)}
-                        disabled={Boolean(busyAction)}
-                        className="rounded-[8px] bg-red-200 text-gray-950 hover:bg-red-100"
-                      >
-                        {busyAction === stage ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCcw className="size-3.5" />}
-                        Retry
-                      </Button>
-                    </div>
-                  ) : null}
-                </motion.div>
-              );
-            })}
-          </CardContent>
-        </Card>
+        <GenerationJobTracker
+          busyAction={busyAction}
+          job={job}
+          message={message}
+          onCancel={() => void cancelJob()}
+          onRetry={(stage) => void retryJob(stage)}
+        />
       </section>
     </main>
   );

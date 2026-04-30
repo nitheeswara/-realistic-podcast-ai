@@ -1,6 +1,6 @@
 "use client";
 
-import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { doc, getDoc, increment, serverTimestamp, updateDoc } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowDown,
@@ -90,6 +90,49 @@ const normalizeScript = (script: PodcastScript): PodcastScript => ({
   updatedAt: new Date().toISOString(),
 });
 
+
+type PodcastGenerateDocument = {
+  ownerId?: unknown;
+  userId?: unknown;
+  topic?: unknown;
+  audience?: unknown;
+  format?: unknown;
+  language?: unknown;
+  duration?: unknown;
+  durationMinutes?: unknown;
+  tone?: unknown;
+  keywords?: unknown;
+  avoid?: unknown;
+};
+
+const stringValue = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
+
+const keywordsValue = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return value
+      .filter((keyword): keyword is string => typeof keyword === "string")
+      .map((keyword) => keyword.trim())
+      .filter((keyword) => keyword.length > 0)
+      .join(", ");
+  }
+
+  return stringValue(value);
+};
+
+const durationValue = (duration: unknown, durationMinutes: unknown) => {
+  const durationText = stringValue(duration);
+
+  if (durationText) {
+    return durationText;
+  }
+
+  if (typeof durationMinutes === "number" && Number.isFinite(durationMinutes)) {
+    return `${durationMinutes} minutes`;
+  }
+
+  return "5-7 minutes";
+};
 export default function ScriptEditorPage() {
   const router = useRouter();
   const params = useParams();
@@ -126,9 +169,9 @@ export default function ScriptEditorPage() {
         return;
       }
 
-      const data = snapshot.data() as { title?: unknown; script?: unknown; ownerId?: unknown };
+      const data = snapshot.data() as { title?: unknown; script?: unknown; ownerId?: unknown; userId?: unknown };
 
-      if (data.ownerId !== user.uid) {
+      if (stringValue(data.ownerId || data.userId) !== user.uid) {
         setError("This podcast belongs to another account.");
         return;
       }
@@ -165,6 +208,30 @@ export default function ScriptEditorPage() {
       setError(null);
 
       try {
+        const podcastRef = doc(db, "podcasts", podcastId);
+        const snapshot = await getDoc(podcastRef);
+
+        if (!snapshot.exists()) {
+          setError("Podcast not found.");
+          return;
+        }
+
+        const podcast = snapshot.data() as PodcastGenerateDocument;
+        const ownerId = stringValue(podcast.ownerId || podcast.userId);
+
+        if (ownerId !== user.uid) {
+          setError("This podcast belongs to another account.");
+          return;
+        }
+
+        const topic = stringValue(podcast.topic);
+        const audience = stringValue(podcast.audience);
+        const format = stringValue(podcast.format);
+
+        if (!topic || !audience || !format) {
+          throw new Error("Podcast brief is missing topic, audience, or format.");
+        }
+
         const token = await user.getIdToken();
         const response = await fetch("/api/scripts/generate", {
           method: "POST",
@@ -172,7 +239,19 @@ export default function ScriptEditorPage() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ podcastId, segmentId }),
+          body: JSON.stringify({
+            podcastId,
+            segmentId,
+            existingScript: script ?? undefined,
+            topic,
+            audience,
+            format,
+            language: stringValue(podcast.language) || "en",
+            duration: durationValue(podcast.duration, podcast.durationMinutes),
+            tone: stringValue(podcast.tone) || "conversational",
+            keywords: keywordsValue(podcast.keywords),
+            avoid: stringValue(podcast.avoid),
+          }),
         });
 
         const payload: unknown = await response.json();
@@ -198,20 +277,32 @@ export default function ScriptEditorPage() {
           throw new Error("Generated script did not match the expected structure.");
         }
 
-        setScript(parsed.data);
+        const nextScript = podcastScriptSchema.parse({
+          ...parsed.data,
+          podcastId,
+          updatedAt: new Date().toISOString(),
+        });
+
+        setSaveStatus("saving");
+        await updateDoc(podcastRef, {
+          script: nextScript,
+          status: "script_ready",
+          scriptVersion: increment(1),
+          updatedAt: serverTimestamp(),
+        });
+
+        setScript(nextScript);
         dirtyRef.current = false;
         setSaveStatus("saved");
-      } catch (generateError) {
-        const message = generateError instanceof Error ? generateError.message : "Generation failed.";
-        setError(message);
+      } catch {
+        setError("AI is busy, retrying usually works. You can try again with the same topic.");
         setSaveStatus("error");
       } finally {
         setGenerating(null);
       }
     },
-    [podcastId, user]
+    [podcastId, script, user]
   );
-
   useEffect(() => {
     if (!pageLoading && !script && !initialGenerateRef.current) {
       initialGenerateRef.current = true;
@@ -384,9 +475,19 @@ export default function ScriptEditorPage() {
         </motion.header>
 
         {error ? (
-          <p className="rounded-[8px] border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-            {error}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
+            <span>{error}</span>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void generateScript()}
+              disabled={Boolean(generating)}
+              className="rounded-[8px] bg-amber-200 text-gray-950 hover:bg-amber-100"
+            >
+              {generating === "full" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCcw className="size-3.5" />}
+              Try again
+            </Button>
+          </div>
         ) : null}
 
         {!script ? (

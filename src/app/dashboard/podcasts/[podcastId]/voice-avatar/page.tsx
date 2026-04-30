@@ -4,14 +4,9 @@ import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { motion } from "framer-motion";
 import { ArrowRight, Check, Loader2, Play, Save, WifiOff } from "lucide-react";
 import Image from "next/image";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { AvatarCloneUpload } from "@/components/voice-avatar-setup/AvatarCloneUpload";
-import { CloningModeSelector } from "@/components/voice-avatar-setup/CloningModeSelector";
-import type { CloningPresetId } from "@/components/voice-avatar-setup/CloningModeSelector";
-import { VoiceCloneUpload } from "@/components/voice-avatar-setup/VoiceCloneUpload";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,6 +33,8 @@ import { cn } from "@/lib/utils";
 import type { Avatar } from "@/types/avatar";
 import type { SpeakerConfig, SpeakerGender, SpeakerRole, Voice, VoiceMode } from "@/types/voice";
 
+type PhaseTwoVoiceMode = Extract<VoiceMode, "ai_stock" | "ai_premium">;
+
 const PREVIEW_TEXT =
   "Welcome to the studio. This is how your podcast voice will sound in the episode.";
 
@@ -58,7 +55,7 @@ const resolveLanguageCode = (value: unknown) => {
 
 const pickVoice = (
   voices: ReadonlyArray<Voice>,
-  mode: Exclude<VoiceMode, "cloned">,
+  mode: PhaseTwoVoiceMode,
   gender: SpeakerGender
 ) =>
   voices.find((voice) => voice.mode === mode && voice.gender === gender) ??
@@ -81,7 +78,7 @@ const defaultSpeaker = (
     id: role,
     role,
     name: role === "host" ? "Host" : "Guest",
-    voiceMode: voice?.mode ?? "ai_stock",
+    voiceMode: voice?.mode === "ai_premium" ? "ai_premium" : "ai_stock",
     voiceId: voice?.id,
     voice,
     avatarMode: "stock",
@@ -98,7 +95,7 @@ const coerceSpeakerConfig = (value: unknown, role: SpeakerRole) => {
     return null;
   }
 
-  return parsed.data;
+  return parsed.data.voiceMode === "cloned" ? null : parsed.data;
 };
 
 const ensureSpeakerAssets = (
@@ -108,26 +105,30 @@ const ensureSpeakerAssets = (
   avatars: ReadonlyArray<Avatar>
 ): SpeakerConfig => {
   const preferredGender: SpeakerGender = role === "host" ? "male" : "female";
+  const voiceMode: PhaseTwoVoiceMode =
+    config.voiceMode === "ai_premium" ? "ai_premium" : "ai_stock";
+  const fallbackVoice = config.voice?.mode === voiceMode ? config.voice : undefined;
+  const fallbackAvatar = config.avatar?.mode === "stock" ? config.avatar : undefined;
   const selectedVoice =
-    config.voiceMode === "cloned"
-      ? config.voice
-      : voices.find((voice) => voice.id === config.voiceId) ??
-        pickVoice(voices, config.voiceMode, preferredGender) ??
-        config.voice;
+    voices.find((voice) => voice.id === config.voiceId && voice.mode === voiceMode) ??
+    pickVoice(voices, voiceMode, preferredGender) ??
+    fallbackVoice;
   const selectedAvatar =
-    config.avatarMode === "cloned"
-      ? config.avatar
-      : avatars.find((avatar) => avatar.id === config.avatarId) ??
-        pickAvatar(avatars, preferredGender) ??
-        config.avatar;
+    avatars.find((avatar) => avatar.id === config.avatarId) ??
+    pickAvatar(avatars, preferredGender) ??
+    fallbackAvatar;
 
   return {
-    ...config,
-    voiceId: selectedVoice?.id ?? config.voiceId,
-    voice: selectedVoice ?? config.voice,
-    avatarMode: config.avatarMode ?? "stock",
-    avatarId: selectedAvatar?.id ?? config.avatarId,
-    avatar: selectedAvatar ?? config.avatar,
+    id: role,
+    role,
+    name: config.name || (role === "host" ? "Host" : "Guest"),
+    voiceMode,
+    voiceId: selectedVoice?.id,
+    voice: selectedVoice,
+    avatarMode: "stock",
+    avatarId: selectedAvatar?.id,
+    avatar: selectedAvatar,
+    speakingStyle: config.speakingStyle,
   };
 };
 
@@ -135,7 +136,7 @@ const compactVoice = (voice: Voice): Voice => ({
   id: voice.id,
   name: voice.name,
   provider: voice.provider,
-  mode: voice.mode,
+  mode: voice.mode === "ai_premium" ? "ai_premium" : "ai_stock",
   gender: voice.gender,
   languageCode: voice.languageCode,
   ...(voice.accent ? { accent: voice.accent } : {}),
@@ -147,7 +148,7 @@ const compactAvatar = (avatar: Avatar): Avatar => ({
   id: avatar.id,
   name: avatar.name,
   provider: avatar.provider,
-  mode: avatar.mode,
+  mode: "stock",
   gender: avatar.gender,
   ...(avatar.previewImageUrl ? { previewImageUrl: avatar.previewImageUrl } : {}),
   ...(avatar.previewVideoUrl ? { previewVideoUrl: avatar.previewVideoUrl } : {}),
@@ -158,17 +159,12 @@ const compactSpeaker = (speaker: SpeakerConfig): SpeakerConfig => ({
   id: speaker.id,
   name: speaker.name,
   role: speaker.role,
-  voiceMode: speaker.voiceMode,
+  voiceMode: speaker.voiceMode === "ai_premium" ? "ai_premium" : "ai_stock",
   ...(speaker.voiceId ? { voiceId: speaker.voiceId } : {}),
   ...(speaker.voice ? { voice: compactVoice(speaker.voice) } : {}),
-  ...(speaker.clonedVoiceId ? { clonedVoiceId: speaker.clonedVoiceId } : {}),
-  ...(speaker.clonedVoiceName ? { clonedVoiceName: speaker.clonedVoiceName } : {}),
-  avatarMode: speaker.avatarMode ?? "stock",
+  avatarMode: "stock",
   ...(speaker.avatarId ? { avatarId: speaker.avatarId } : {}),
   ...(speaker.avatar ? { avatar: compactAvatar(speaker.avatar) } : {}),
-  ...(speaker.clonedAvatarId ? { clonedAvatarId: speaker.clonedAvatarId } : {}),
-  ...(speaker.clonedAvatarName ? { clonedAvatarName: speaker.clonedAvatarName } : {}),
-  ...(speaker.clonedAvatarPreviewUrl ? { clonedAvatarPreviewUrl: speaker.clonedAvatarPreviewUrl } : {}),
   ...(speaker.speakingStyle ? { speakingStyle: speaker.speakingStyle } : {}),
 });
 
@@ -200,7 +196,6 @@ export default function VoiceAvatarPage() {
   const [guest, setGuest] = useState<SpeakerConfig>(() => defaultSpeaker("guest"));
   const [voices, setVoices] = useState<Voice[]>(() => [...fallbackVoiceOptions]);
   const [avatars, setAvatars] = useState<Avatar[]>(() => [...fallbackAvatarOptions]);
-  const [preset, setPreset] = useState<CloningPresetId>("full_ai");
   const [podcastLanguageCode, setPodcastLanguageCode] = useState("en-US");
   const [pageLoading, setPageLoading] = useState(true);
   const [catalogLoading, setCatalogLoading] = useState(false);
@@ -315,7 +310,7 @@ export default function VoiceAvatarPage() {
         throw new Error("Sign in again to preview voices.");
       }
 
-      if (voice.provider !== "elevenlabs" && voice.provider !== "sarvam") {
+      if (voice.provider !== "elevenlabs" && voice.provider !== "sarvam" && voice.provider !== "gemini") {
         throw new Error("Voice preview is unavailable for this provider.");
       }
 
@@ -344,53 +339,7 @@ export default function VoiceAvatarPage() {
     [podcastLanguageCode, user]
   );
 
-  const applyPreset = (nextPreset: CloningPresetId) => {
-    setPreset(nextPreset);
-
-    if (nextPreset === "custom") {
-      return;
-    }
-
-    const applySpeakerPreset = (
-      speaker: SpeakerConfig,
-      voiceMode: VoiceMode,
-      avatarMode: "stock" | "cloned"
-    ): SpeakerConfig => {
-      const preferredGender: SpeakerGender = speaker.role === "host" ? "male" : "female";
-      const nextVoice = voiceMode === "cloned" ? speaker.voice : pickVoice(voices, voiceMode, preferredGender);
-      const nextAvatar = avatarMode === "cloned" ? speaker.avatar : pickAvatar(avatars, preferredGender);
-
-      return {
-        ...speaker,
-        voiceMode,
-        voiceId: nextVoice?.id ?? speaker.voiceId,
-        voice: nextVoice ?? speaker.voice,
-        avatarMode,
-        avatarId: nextAvatar?.id ?? speaker.avatarId,
-        avatar: nextAvatar ?? speaker.avatar,
-      };
-    };
-
-    const table: Record<Exclude<CloningPresetId, "custom">, {
-      hostVoice: VoiceMode;
-      hostAvatar: "stock" | "cloned";
-      guestVoice: VoiceMode;
-      guestAvatar: "stock" | "cloned";
-    }> = {
-      full_ai: { hostVoice: "ai_premium", hostAvatar: "stock", guestVoice: "ai_premium", guestAvatar: "stock" },
-      clone_host: { hostVoice: "cloned", hostAvatar: "cloned", guestVoice: "ai_premium", guestAvatar: "stock" },
-      clone_guest: { hostVoice: "ai_premium", hostAvatar: "stock", guestVoice: "cloned", guestAvatar: "cloned" },
-      clone_both: { hostVoice: "cloned", hostAvatar: "cloned", guestVoice: "cloned", guestAvatar: "cloned" },
-      clone_host_voice: { hostVoice: "cloned", hostAvatar: "stock", guestVoice: "ai_premium", guestAvatar: "stock" },
-      clone_guest_avatar: { hostVoice: "ai_premium", hostAvatar: "stock", guestVoice: "ai_premium", guestAvatar: "cloned" },
-    };
-
-    const selected = table[nextPreset];
-    setHost((current) => applySpeakerPreset(current, selected.hostVoice, selected.hostAvatar));
-    setGuest((current) => applySpeakerPreset(current, selected.guestVoice, selected.guestAvatar));
-  };
-
-  const saveSelections = async () => {
+  const saveSelections = async (navigateAfterSave = false) => {
     if (!podcastId) {
       return;
     }
@@ -406,13 +355,16 @@ export default function VoiceAvatarPage() {
         host: nextHost,
         guest: nextGuest,
         speakers: [nextHost, nextGuest],
-        cloningPreset: preset,
         status: "configuring",
         updatedAt: serverTimestamp(),
       });
       setHost(nextHost);
       setGuest(nextGuest);
       setMessage("Selections saved.");
+
+      if (navigateAfterSave) {
+        router.push(`/dashboard/podcasts/${podcastId}/studio`);
+      }
     } catch {
       setMessage("Could not save selections.");
     } finally {
@@ -441,19 +393,19 @@ export default function VoiceAvatarPage() {
         >
           <div className="space-y-3">
             <p className="w-fit rounded-[8px] border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">
-              Clone matrix
+              Voice and avatar
             </p>
             <div>
               <h1 className="text-4xl font-semibold tracking-tight md:text-5xl">Cast the episode</h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-gray-400">
-                Choose AI or cloned voices and avatars independently for host and guest.
+                Choose stock or premium AI voices and pair each speaker with a HeyGen avatar.
               </p>
             </div>
           </div>
           <div className="flex flex-wrap gap-3">
             <Button
               type="button"
-              onClick={saveSelections}
+              onClick={() => void saveSelections()}
               disabled={saving}
               className="h-11 rounded-[8px] border-white/10 bg-white/5 px-4 text-sm text-white hover:bg-white/10"
               variant="outline"
@@ -461,11 +413,14 @@ export default function VoiceAvatarPage() {
               {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
               Save selections
             </Button>
-            <Button asChild className="h-11 rounded-[8px] bg-amber-300 px-4 text-sm font-semibold text-gray-950 hover:bg-amber-200">
-              <Link href={`/dashboard/podcasts/${podcastId}/studio`}>
-                Next: Studio Settings
-                <ArrowRight className="size-4" />
-              </Link>
+            <Button
+              type="button"
+              onClick={() => void saveSelections(true)}
+              disabled={saving}
+              className="h-11 rounded-[8px] bg-amber-300 px-4 text-sm font-semibold text-gray-950 hover:bg-amber-200"
+            >
+              Next: Studio Settings
+              <ArrowRight className="size-4" />
             </Button>
           </div>
         </motion.header>
@@ -488,15 +443,9 @@ export default function VoiceAvatarPage() {
           <p className="rounded-[8px] border border-white/10 bg-white/5 px-4 py-3 text-sm text-gray-200">{message}</p>
         ) : null}
 
-        <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
-          <h2 className="text-lg font-semibold text-white">Preset mode</h2>
-          <CloningModeSelector value={preset} onChange={applyPreset} />
-        </motion.section>
-
         <div className="grid gap-4 lg:grid-cols-2">
           <SpeakerConfigCard
             role="host"
-            podcastId={podcastId ?? ""}
             config={host}
             voices={voices}
             avatars={avatars}
@@ -505,7 +454,6 @@ export default function VoiceAvatarPage() {
           />
           <SpeakerConfigCard
             role="guest"
-            podcastId={podcastId ?? ""}
             config={guest}
             voices={voices}
             avatars={avatars}
@@ -520,7 +468,6 @@ export default function VoiceAvatarPage() {
 
 interface SpeakerConfigCardProps {
   role: SpeakerRole;
-  podcastId: string;
   config: SpeakerConfig;
   voices: Voice[];
   avatars: Avatar[];
@@ -530,7 +477,6 @@ interface SpeakerConfigCardProps {
 
 function SpeakerConfigCard({
   role,
-  podcastId,
   config,
   voices,
   avatars,
@@ -538,31 +484,27 @@ function SpeakerConfigCard({
   onPreviewVoice,
 }: SpeakerConfigCardProps) {
   const [voiceGender, setVoiceGender] = useState<SpeakerGender>(role === "host" ? "male" : "female");
-  const avatarTab = config.avatarMode === "cloned" ? "cloned" : config.avatar?.gender ?? (role === "host" ? "male" : "female");
+  const [avatarGender, setAvatarGender] = useState<SpeakerGender>(role === "host" ? "male" : "female");
+  const voiceMode: PhaseTwoVoiceMode = config.voiceMode === "ai_premium" ? "ai_premium" : "ai_stock";
 
   const filteredVoices = useMemo(
     () =>
       voices.filter(
-        (voice) => voice.mode === config.voiceMode && voice.gender === voiceGender
+        (voice) => voice.mode === voiceMode && voice.gender === voiceGender
       ),
-    [config.voiceMode, voiceGender, voices]
+    [voiceMode, voiceGender, voices]
   );
 
   const filteredAvatars = useMemo(
-    () => avatars.filter((avatar) => avatar.gender === avatarTab),
-    [avatarTab, avatars]
+    () => avatars.filter((avatar) => avatar.gender === avatarGender),
+    [avatarGender, avatars]
   );
 
-  const selectVoiceMode = (voiceMode: VoiceMode) => {
-    if (voiceMode === "cloned") {
-      onChange({ ...config, voiceMode });
-      return;
-    }
-
-    const nextVoice = pickVoice(voices, voiceMode, voiceGender);
+  const selectVoiceMode = (nextVoiceMode: PhaseTwoVoiceMode) => {
+    const nextVoice = pickVoice(voices, nextVoiceMode, voiceGender);
     onChange({
       ...config,
-      voiceMode,
+      voiceMode: nextVoiceMode,
       voiceId: nextVoice?.id ?? config.voiceId,
       voice: nextVoice ?? config.voice,
     });
@@ -571,13 +513,14 @@ function SpeakerConfigCard({
   const selectVoice = (voice: Voice) => {
     onChange({
       ...config,
-      voiceMode: voice.mode,
+      voiceMode: voice.mode === "ai_premium" ? "ai_premium" : "ai_stock",
       voiceId: voice.id,
       voice,
     });
   };
 
   const selectAvatarGender = (gender: SpeakerGender) => {
+    setAvatarGender(gender);
     const nextAvatar = pickAvatar(avatars, gender);
     onChange({
       ...config,
@@ -613,18 +556,17 @@ function SpeakerConfigCard({
               </CardDescription>
             </div>
             <Badge className="rounded-[8px] border border-amber-300/20 bg-amber-300/10 text-amber-100" variant="outline">
-              {config.voiceMode === "cloned" || config.avatarMode === "cloned" ? "Clone mix" : "Full AI"}
+              Full AI
             </Badge>
           </div>
         </CardHeader>
         <CardContent className="space-y-7">
           <section className="space-y-3">
             <h2 className="text-sm font-semibold text-gray-200">Voice selector</h2>
-            <Tabs value={config.voiceMode} onValueChange={(value) => selectVoiceMode(value as VoiceMode)}>
-              <TabsList className="grid w-full grid-cols-3 rounded-[8px] bg-white/10">
+            <Tabs value={voiceMode} onValueChange={(value) => selectVoiceMode(value as PhaseTwoVoiceMode)}>
+              <TabsList className="grid w-full grid-cols-2 rounded-[8px] bg-white/10">
                 <TabsTrigger value="ai_stock" className="rounded-[8px]">AI Stock</TabsTrigger>
                 <TabsTrigger value="ai_premium" className="rounded-[8px]">AI Premium</TabsTrigger>
-                <TabsTrigger value="cloned" className="rounded-[8px]">Clone your voice</TabsTrigger>
               </TabsList>
               <TabsContent value="ai_stock" className="mt-4 space-y-3">
                 <GenderFilter value={voiceGender} onChange={setVoiceGender} />
@@ -634,58 +576,13 @@ function SpeakerConfigCard({
                 <GenderFilter value={voiceGender} onChange={setVoiceGender} />
                 <VoiceGrid voices={filteredVoices} selectedId={config.voiceId} onSelect={selectVoice} onPreview={onPreviewVoice} />
               </TabsContent>
-              <TabsContent value="cloned" className="mt-4">
-                <VoiceCloneUpload
-                  podcastId={podcastId}
-                  speaker={role}
-                  existingVoiceId={config.clonedVoiceId}
-                  existingVoiceName={config.clonedVoiceName}
-                  onCloneCreated={(clone) =>
-                    onChange({
-                      ...config,
-                      voiceMode: "cloned",
-                      clonedVoiceId: clone.voiceId,
-                      clonedVoiceName: clone.name,
-                    })
-                  }
-                />
-              </TabsContent>
             </Tabs>
           </section>
 
           <section className="space-y-3">
             <h2 className="text-sm font-semibold text-gray-200">Avatar selector</h2>
-            <Tabs value={avatarTab} onValueChange={(value) => value === "cloned" ? onChange({ ...config, avatarMode: "cloned" }) : selectAvatarGender(value as SpeakerGender)}>
-              <TabsList className="grid w-full grid-cols-3 rounded-[8px] bg-white/10">
-                <TabsTrigger value="male" className="rounded-[8px]">Male Stock</TabsTrigger>
-                <TabsTrigger value="female" className="rounded-[8px]">Female Stock</TabsTrigger>
-                <TabsTrigger value="cloned" className="rounded-[8px]">Clone your avatar</TabsTrigger>
-              </TabsList>
-              <TabsContent value="male" className="mt-4">
-                <AvatarGrid avatars={filteredAvatars} selectedId={config.avatarId} onSelect={selectAvatar} />
-              </TabsContent>
-              <TabsContent value="female" className="mt-4">
-                <AvatarGrid avatars={filteredAvatars} selectedId={config.avatarId} onSelect={selectAvatar} />
-              </TabsContent>
-              <TabsContent value="cloned" className="mt-4">
-                <AvatarCloneUpload
-                  podcastId={podcastId}
-                  speaker={role}
-                  existingAvatarId={config.clonedAvatarId}
-                  existingAvatarName={config.clonedAvatarName}
-                  existingPreviewUrl={config.clonedAvatarPreviewUrl}
-                  onCloneCreated={(clone) =>
-                    onChange({
-                      ...config,
-                      avatarMode: "cloned",
-                      clonedAvatarId: clone.avatarId,
-                      clonedAvatarName: clone.name,
-                      clonedAvatarPreviewUrl: clone.previewImageUrl,
-                    })
-                  }
-                />
-              </TabsContent>
-            </Tabs>
+            <GenderFilter value={avatarGender} onChange={selectAvatarGender} />
+            <AvatarGrid avatars={filteredAvatars} selectedId={config.avatarId} onSelect={selectAvatar} />
           </section>
         </CardContent>
       </Card>
@@ -865,6 +762,8 @@ function AvatarCard({
         alt={avatar.name}
         width={420}
         height={240}
+        loading="eager"
+        priority={true}
         sizes="(min-width: 1024px) 25vw, (min-width: 640px) 50vw, 100vw"
         className="h-40 w-full object-cover"
       />

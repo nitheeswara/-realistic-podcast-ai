@@ -1,6 +1,6 @@
 # Realistic Podcast AI
 
-Realistic Podcast AI is a Next.js App Router studio for producing scripted podcast videos with AI script generation, voice selection, avatar setup, generation progress, exports, and Phase 3 voice/avatar cloning. The project uses strict TypeScript, Zod contracts, Firebase Auth/Firestore/Storage, Firebase Admin routes, shadcn/ui, Tailwind CSS, and Framer Motion.
+Realistic Podcast AI is a Next.js App Router studio for producing scripted podcast videos with AI script generation, voice selection, avatar setup, generation progress, exports, and Phase 3 voice/avatar cloning. The project uses strict TypeScript, Zod contracts, Firebase Auth/Firestore, Firebase Admin routes, Cloudinary media storage, shadcn/ui, Tailwind CSS, and Framer Motion.
 
 ## Stack
 
@@ -8,10 +8,11 @@ Realistic Podcast AI is a Next.js App Router studio for producing scripted podca
 - TypeScript strict mode
 - Tailwind CSS 4
 - shadcn/ui primitives
-- Firebase Auth, Firestore, Storage, and Firebase Admin
+- Firebase Auth, Firestore, and Firebase Admin
 - Gemini script generation on server routes
 - ElevenLabs and Sarvam voice routes on the server
 - HeyGen stock and photo-avatar routes on the server
+- Cloudinary media uploads
 - FFmpeg via `ffmpeg-static`
 - Optional Python lipsync service for Wav2Lip/SadTalker integration
 
@@ -29,7 +30,6 @@ npm install
 NEXT_PUBLIC_FIREBASE_API_KEY=
 NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
 NEXT_PUBLIC_FIREBASE_PROJECT_ID=
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
 NEXT_PUBLIC_FIREBASE_APP_ID=
 
@@ -38,12 +38,14 @@ FIREBASE_CLIENT_EMAIL=
 FIREBASE_PRIVATE_KEY=
 
 GEMINI_API_KEY=
-OPENAI_API_KEY=
 ELEVENLABS_API_KEY=
 SARVAM_API_KEY=
 HEYGEN_API_KEY=
 SYNCLABS_API_KEY=
 DID_API_KEY=
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
 
 APP_BASE_URL=http://localhost:3000
 PYTHON_SERVICE_URL=

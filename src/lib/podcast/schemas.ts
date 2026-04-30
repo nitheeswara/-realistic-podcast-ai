@@ -22,7 +22,7 @@ export const podcastLanguageSchema = z.enum(valuesOf(languageOptions));
 export const voiceModeSchema = z.enum(valuesOf(voiceModeOptions));
 export const speakerGenderSchema = z.enum(["male", "female"]);
 export const speakerRoleSchema = z.enum(["host", "guest"]);
-export const voiceProviderSchema = z.enum(["elevenlabs", "sarvam", "openai", "custom"]);
+export const voiceProviderSchema = z.enum(["elevenlabs", "sarvam", "gemini", "openai", "custom"]);
 export const avatarProviderSchema = z.enum(["heygen", "did", "synclabs", "custom"]);
 export const avatarModeSchema = z.enum(["stock", "premium", "cloned"]);
 export const jobStageSchema = z.enum(tupleValues(jobStages));
@@ -39,7 +39,7 @@ export const voiceSchema = z.object({
   gender: speakerGenderSchema,
   languageCode: z.string().min(2),
   accent: z.string().optional(),
-  previewUrl: z.string().url().optional(),
+  previewUrl: z.string().url().nullable().optional(),
   externalVoiceId: z.string().min(1).optional(),
 });
 
@@ -100,14 +100,15 @@ export const generateScriptRequestSchema = z.object({
 
 export const speakerConfigSchema = z.object({
   id: speakerRoleSchema,
-  name: z.string().min(1).max(80),
+  name: z.string().min(1).max(80).default("Speaker"),
   role: speakerRoleSchema,
-  voiceMode: voiceModeSchema,
+  gender: speakerGenderSchema.default("male"),
+  voiceMode: voiceModeSchema.default("ai_stock"),
   voiceId: z.string().min(1).optional(),
   voice: voiceSchema.optional(),
   clonedVoiceId: z.string().min(1).optional(),
   clonedVoiceName: z.string().min(1).max(120).optional(),
-  avatarMode: avatarModeSchema.optional(),
+  avatarMode: avatarModeSchema.default("stock"),
   avatarId: z.string().min(1).optional(),
   avatar: avatarSchema.optional(),
   clonedAvatarId: z.string().min(1).optional(),
@@ -123,7 +124,7 @@ export const voiceListResponseSchema = z.object({
 export const voicePreviewRequestSchema = z.object({
   voiceId: z.string().min(1),
   text: z.string().trim().min(1).max(1000),
-  provider: z.enum(["elevenlabs", "sarvam"]).optional(),
+  provider: z.enum(["elevenlabs", "sarvam", "gemini"]).optional(),
   lang: z.string().min(2).optional(),
   speaker: z.string().min(1).optional(),
 });
@@ -187,6 +188,7 @@ export const generationJobSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
   podcastId: z.string().min(1),
+  retryJobId: z.string().min(1).optional(),
   status: z.enum(["queued", "running", "completed", "failed", "canceled"]),
   stage: jobStageSchema,
   stages: z.record(jobStageSchema, stageProgressSchema),

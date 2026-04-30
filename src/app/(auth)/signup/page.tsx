@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import type { SubmitHandler } from "react-hook-form";
 import { z } from "zod";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -130,23 +131,28 @@ export default function SignupPage() {
     setAuthError(null);
 
     try {
-      const credential = await createUserWithEmailAndPassword(
+      const userCredential = await createUserWithEmailAndPassword(
         auth,
         values.email,
         values.password
       );
+      const user = userCredential.user;
 
-      await updateProfile(credential.user, {
+      try {
+        await setDoc(doc(db, "users", user.uid), {
+          uid: user.uid,
+          name: values.name,
+          email: values.email,
+          plan: "free",
+          credits: 3,
+          createdAt: serverTimestamp(),
+        });
+      } catch {
+        toast.error("Your account was created, but the profile could not be saved.");
+      }
+
+      await updateProfile(user, {
         displayName: values.name,
-      });
-
-      await setDoc(doc(db, "users", credential.user.uid), {
-        name: values.name,
-        email: values.email,
-        plan: "free",
-        credits: 3,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
       });
 
       router.replace("/dashboard");

@@ -1,80 +1,125 @@
-import { z } from "zod";
+import { NextResponse } from "next/server";
 
-import { serverEnv } from "@/config/env";
-import { avatarListResponseSchema } from "@/lib/podcast/schemas";
-import { normalizeHeyGenAvatar } from "@/lib/podcast/provider-catalog";
-import { ApiAuthError, jsonError, requireUserFromRequest } from "@/lib/server/auth";
+interface AvatarListItem {
+  id: string;
+  name: string;
+  gender: string;
+  previewImage: string;
+  type?: string;
+}
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+interface HeyGenAvatarItem {
+  avatar_id: string;
+  avatar_name: string;
+  avatar_type?: string;
+  gender?: string;
+  preview_image_url?: string;
+}
 
-const heyGenAvatarSchema = z
-  .object({
-    avatar_id: z.string().min(1),
-    avatar_name: z.string().optional(),
-    gender: z.string().optional(),
-    preview_image_url: z.string().optional(),
-    avatar_type: z.string().optional(),
-  })
-  .passthrough();
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
 
-const heyGenAvatarsResponseSchema = z.object({
-  data: z.object({
-    avatars: z.array(heyGenAvatarSchema),
-  }),
-});
-
-const optionalUrl = (value: string | undefined) => {
-  if (!value) {
-    return undefined;
+const isHeyGenAvatarItem = (value: unknown): value is HeyGenAvatarItem => {
+  if (!isRecord(value)) {
+    return false;
   }
 
-  try {
-    return new URL(value).toString();
-  } catch {
-    return undefined;
-  }
+  return typeof value.avatar_id === "string" && typeof value.avatar_name === "string";
 };
 
-export async function GET(request: Request) {
+const getHeyGenAvatars = (payload: unknown) => {
+  if (!isRecord(payload) || !isRecord(payload.data) || !Array.isArray(payload.data.avatars)) {
+    return [];
+  }
+
+  return payload.data.avatars;
+};
+
+export async function GET() {
   try {
-    await requireUserFromRequest(request);
+    const apiKey = process.env.HEYGEN_API_KEY;
 
-    if (!serverEnv.HEYGEN_API_KEY) {
-      throw new Error("HEYGEN_API_KEY is required to list HeyGen avatars.");
+    if (!apiKey) {
+      return NextResponse.json({ avatars: MOCK_AVATARS });
     }
 
-    const response = await fetch("https://api.heygen.com/v2/avatars", {
-      headers: {
-        "x-api-key": serverEnv.HEYGEN_API_KEY,
-      },
-      cache: "no-store",
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
-    if (!response.ok) {
-      throw new Error(`HeyGen avatar list failed with status ${response.status}.`);
-    }
+    try {
+      const res = await fetch("https://api.heygen.com/v2/avatars", {
+        headers: { "x-api-key": apiKey },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
 
-    const payload: unknown = await response.json();
-    const parsed = heyGenAvatarsResponseSchema.parse(payload);
-    const avatars = parsed.data.avatars
-      .filter((avatar) => avatar.avatar_type === "system")
-      .map((avatar) =>
-        normalizeHeyGenAvatar({
+      if (!res.ok) {
+        console.error("HeyGen avatars API error:", res.status);
+        return NextResponse.json({ avatars: MOCK_AVATARS });
+      }
+
+      const avatars = getHeyGenAvatars(await res.json())
+        .filter(isHeyGenAvatarItem)
+        .map((avatar): AvatarListItem => ({
           id: avatar.avatar_id,
-          name: avatar.avatar_name ?? "HeyGen Avatar",
-          gender: avatar.gender,
-          previewImage: optionalUrl(avatar.preview_image_url),
-        })
-      );
+          name: avatar.avatar_name,
+          gender: avatar.gender ?? "neutral",
+          previewImage: avatar.preview_image_url ?? "",
+          type: avatar.avatar_type,
+        }));
 
-    return Response.json(avatarListResponseSchema.parse({ avatars }));
-  } catch (error) {
-    if (error instanceof ApiAuthError) {
-      return jsonError(error.message, 401);
+      console.log(`HeyGen avatars loaded: ${avatars.length}`);
+      return NextResponse.json({
+        avatars: avatars.length > 0 ? avatars : MOCK_AVATARS,
+      });
+    } catch (fetchError) {
+      clearTimeout(timeout);
+      if (fetchError instanceof Error && fetchError.name === "AbortError") {
+        console.error("HeyGen request timed out");
+      }
+      return NextResponse.json({ avatars: MOCK_AVATARS });
     }
-
-    const message = error instanceof Error ? error.message : "Avatar listing failed.";
-    return jsonError(message, 500);
+  } catch (error) {
+    console.error("Avatar list error:", error instanceof Error ? error.message : error);
+    return NextResponse.json({ avatars: MOCK_AVATARS });
   }
 }
+
+const MOCK_AVATARS: AvatarListItem[] = [
+  {
+    id: "mock_male_1",
+    name: "Alex",
+    gender: "male",
+    previewImage: "https://api.dicebear.com/7.x/avataaars/svg?seed=Alex",
+  },
+  {
+    id: "mock_male_2",
+    name: "James",
+    gender: "male",
+    previewImage: "https://api.dicebear.com/7.x/avataaars/svg?seed=James",
+  },
+  {
+    id: "mock_male_3",
+    name: "Marcus",
+    gender: "male",
+    previewImage: "https://api.dicebear.com/7.x/avataaars/svg?seed=Marcus",
+  },
+  {
+    id: "mock_female_1",
+    name: "Priya",
+    gender: "female",
+    previewImage: "https://api.dicebear.com/7.x/avataaars/svg?seed=Priya",
+  },
+  {
+    id: "mock_female_2",
+    name: "Sarah",
+    gender: "female",
+    previewImage: "https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah",
+  },
+  {
+    id: "mock_female_3",
+    name: "Aisha",
+    gender: "female",
+    previewImage: "https://api.dicebear.com/7.x/avataaars/svg?seed=Aisha",
+  },
+];

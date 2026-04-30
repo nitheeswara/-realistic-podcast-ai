@@ -211,8 +211,8 @@ export default function StudioSettingsPage() {
       }
 
       router.push(`/dashboard/podcasts/${podcastId}/generating?jobId=${jobId}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Video generation failed.");
+    } catch {
+      setMessage("AI is busy, retrying usually works. Please try generating again.");
     } finally {
       setGenerating(false);
     }
@@ -301,6 +301,8 @@ export default function StudioSettingsPage() {
                     className="h-20 w-[120px] shrink-0 object-cover"
                     width={120}
                     height={80}
+                  loading="eager"
+                    priority={true}
                   />
                   <div className="flex items-center justify-between p-3">
                     <span className="text-sm font-semibold text-white">{background.label}</span>

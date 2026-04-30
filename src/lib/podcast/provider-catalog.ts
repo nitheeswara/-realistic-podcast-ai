@@ -29,28 +29,16 @@ const SARVAM_LANGUAGE_NAMES: Record<SarvamLanguageCode, string> = {
 
 const sarvamSpeakers = [
   {
-    speaker: "shubh",
-    name: "Shubh",
+    speaker: "arvind",
+    name: "Arvind",
     gender: "male",
-    mode: "ai_stock",
-  },
-  {
-    speaker: "priya",
-    name: "Priya",
-    gender: "female",
     mode: "ai_stock",
   },
   {
     speaker: "anushka",
     name: "Anushka",
     gender: "female",
-    mode: "ai_premium",
-  },
-  {
-    speaker: "abhilash",
-    name: "Abhilash",
-    gender: "male",
-    mode: "ai_premium",
+    mode: "ai_stock",
   },
 ] as const satisfies ReadonlyArray<{
   speaker: string;

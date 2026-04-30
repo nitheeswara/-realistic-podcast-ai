@@ -1,7 +1,7 @@
-export { auth, db, firebaseApp, storage } from "@/config/firebase-client";
 export {
   adminApp,
   adminAuth,
   adminDb,
   adminStorage,
+  logAdminStorageUploadError,
 } from "@/lib/server/firebase-admin";

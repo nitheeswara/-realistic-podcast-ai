@@ -1,201 +1,404 @@
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
-import type { Schema } from "@google/generative-ai";
-import { FieldValue } from "firebase-admin/firestore";
+import Groq from "groq-sdk";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { serverEnv } from "@/config/env";
-import { generateScriptRequestSchema, podcastScriptSchema } from "@/lib/podcast/schemas";
-import { ApiAuthError, jsonError, requireUserFromRequest } from "@/lib/server/auth";
-import { adminDb } from "@/lib/server/firebase-admin";
-import type { PodcastScript } from "@/types/script";
+import { podcastScriptSchema } from "@/lib/podcast/schemas";
+import type { PodcastScript, ScriptSpeakerId } from "@/types/script";
 
-export const runtime = "nodejs";
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY! });
 
-type PodcastBrief = z.infer<typeof podcastBriefSchema>;
+const Body = z.object({
+  topic: z.string().min(1),
+  audience: z.string().min(1),
+  format: z.string().default("educational"),
+  language: z.string().default("en"),
+  duration: z.string().default("5-7 minutes"),
+  tone: z.string().default("conversational"),
+  keywords: z.string().default(""),
+  avoid: z.string().default(""),
+  podcastId: z.string().min(1).optional(),
+  existingScript: z.unknown().optional(),
+  segmentId: z.string().min(1).optional(),
+});
 
-const podcastBriefSchema = z
-  .object({
-    id: z.string().min(1),
-    ownerId: z.string().min(1),
-    topic: z.string().min(1),
-    audience: z.string().min(1),
-    format: z.string().min(1),
-    language: z.string().min(1),
-    durationMinutes: z.number().min(1).max(15),
-    tone: z.string().min(1),
-    keywords: z.array(z.string()).default([]),
-    avoid: z.string().default(""),
-    script: podcastScriptSchema.optional(),
-  })
-  .passthrough();
+const SYSTEM_PROMPT = `You are a podcast scriptwriter.
+You must respond with ONLY a JSON object. No text before or after.
+No markdown. No code fences. No explanation.
 
-const responseSchema: Schema = {
-  type: SchemaType.OBJECT,
-  properties: {
-    id: { type: SchemaType.STRING },
-    podcastId: { type: SchemaType.STRING },
-    title: { type: SchemaType.STRING },
-    hook: { type: SchemaType.STRING },
-    totalEstimatedDurationSeconds: { type: SchemaType.NUMBER },
-    createdAt: { type: SchemaType.STRING },
-    updatedAt: { type: SchemaType.STRING },
-    segments: {
-      type: SchemaType.ARRAY,
-      items: {
-        type: SchemaType.OBJECT,
-        properties: {
-          id: { type: SchemaType.STRING },
-          title: { type: SchemaType.STRING },
-          summary: { type: SchemaType.STRING },
-          order: { type: SchemaType.INTEGER },
-          turns: {
-            type: SchemaType.ARRAY,
-            items: {
-              type: SchemaType.OBJECT,
-              properties: {
-                id: { type: SchemaType.STRING },
-                speakerId: {
-                  type: SchemaType.STRING,
-                  format: "enum",
-                  enum: ["host", "guest"],
-                },
-                text: { type: SchemaType.STRING },
-                emotion: { type: SchemaType.STRING },
-                pauseAfterMs: { type: SchemaType.INTEGER },
-                estimatedDurationSeconds: { type: SchemaType.NUMBER },
-              },
-              required: ["id", "speakerId", "text"],
-            },
-          },
-        },
-        required: ["id", "title", "turns", "order"],
-      },
-    },
-  },
-  required: ["id", "podcastId", "title", "segments", "createdAt", "updatedAt"],
-};
-
-const stripCodeFences = (text: string) =>
-  text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-
-const buildPrompt = (podcast: PodcastBrief, segmentId?: string) => {
-  const existingScript = podcast.script
-    ? `Existing script JSON:\n${JSON.stringify(podcast.script)}`
-    : "No existing script yet.";
-
-  const segmentDirection = segmentId
-    ? `Regenerate only segment ${segmentId}. Return the full script JSON with the regenerated segment replaced and all other segments preserved unless continuity requires tiny bridge edits.`
-    : "Generate the full script from scratch.";
-
-  return `You are an expert podcast scriptwriter for realistic AI-hosted video podcasts.
-Return only JSON matching this structure exactly: PodcastScript with segments and turns.
-Every turn speakerId must be either "host" or "guest".
-Make the dialogue sound human, specific, and production-ready.
-Avoid stage directions outside the JSON fields.
-
-Podcast brief:
-Topic: ${podcast.topic}
-Audience: ${podcast.audience}
-Format: ${podcast.format}
-Language: ${podcast.language}
-Target duration: ${podcast.durationMinutes} minutes
-Tone: ${podcast.tone}
-Keywords: ${podcast.keywords.join(", ") || "none"}
-Avoid: ${podcast.avoid || "none"}
-
-${segmentDirection}
-${existingScript}
-
-Use ISO strings for createdAt and updatedAt. Use podcastId "${podcast.id}". Make 3-5 segments with 2-6 turns each unless the duration needs less.`;
-};
-
-const generateScriptWithGemini = async (
-  podcast: PodcastBrief,
-  segmentId?: string
-): Promise<PodcastScript> => {
-  if (!serverEnv.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is required to generate scripts.");
-  }
-
-  const genAI = new GoogleGenerativeAI(serverEnv.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    generationConfig: {
-      temperature: 0.8,
-      responseMimeType: "application/json",
-      responseSchema,
-    },
-  });
-
-  const result = await model.generateContent(buildPrompt(podcast, segmentId));
-  const rawText = result.response.text();
-  const parsedJson: unknown = JSON.parse(stripCodeFences(rawText));
-  const parsedObject = z.record(z.string(), z.unknown()).parse(parsedJson);
-  const now = new Date().toISOString();
-
-  const script = podcastScriptSchema.parse({
-    ...parsedObject,
-    id: typeof parsedObject.id === "string" ? parsedObject.id : crypto.randomUUID(),
-    podcastId: podcast.id,
-    createdAt: typeof parsedObject.createdAt === "string" ? parsedObject.createdAt : now,
-    updatedAt: now,
-  });
-
-  return script;
-};
-
-export async function POST(request: Request) {
-  try {
-    const user = await requireUserFromRequest(request);
-    const body: unknown = await request.json();
-    const parsedBody = generateScriptRequestSchema.safeParse(body);
-
-    if (!parsedBody.success) {
-      return jsonError("Invalid script generation request.", 400);
+The JSON must have EXACTLY these fields:
+{
+  "title": "Episode title here",
+  "summary": "Brief summary here",
+  "estimatedDurationSec": 300,
+  "language": "en",
+  "segments": [
+    {
+      "segmentTitle": "Opening",
+      "turns": [
+        { "speaker": "host", "text": "What the host says" },
+        { "speaker": "guest", "text": "What the guest says" }
+      ]
     }
-
-    const podcastRef = adminDb.collection("podcasts").doc(parsedBody.data.podcastId);
-    const snapshot = await podcastRef.get();
-
-    if (!snapshot.exists) {
-      return jsonError("Podcast not found.", 404);
-    }
-
-    const podcast = podcastBriefSchema.parse({ id: snapshot.id, ...snapshot.data() });
-
-    if (podcast.ownerId !== user.uid) {
-      return jsonError("Forbidden.", 403);
-    }
-
-    await podcastRef.update({
-      status: "scripting",
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-
-    const script = await generateScriptWithGemini(podcast, parsedBody.data.segmentId);
-
-    await podcastRef.update({
-      script,
-      status: "script_ready",
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-
-    return Response.json({ script });
-  } catch (error) {
-    if (error instanceof ApiAuthError) {
-      return jsonError(error.message, 401);
-    }
-
-    const message = error instanceof Error ? error.message : "Script generation failed.";
-    return jsonError(message, 500);
-  }
+  ]
 }
 
+CRITICAL RULES:
+- speaker must be exactly "host" or "guest" in lowercase
+- Every segment must have at least 2 turns
+- turns must alternate between host and guest
+- Return ONLY the JSON object, nothing else at all`;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
 
+const firstString = (...values: unknown[]) => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
 
+  return undefined;
+};
 
+const parseDurationSeconds = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const numeric = Number(trimmed);
+
+  if (Number.isFinite(numeric)) {
+    return numeric;
+  }
+
+  const rangeMatch = trimmed.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
+
+  if (rangeMatch) {
+    const start = Number(rangeMatch[1]);
+    const end = Number(rangeMatch[2]);
+
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      return Math.round(((start + end) / 2) * 60);
+    }
+  }
+
+  const minuteMatch = trimmed.match(/(\d+(?:\.\d+)?)/);
+
+  if (minuteMatch) {
+    const minutes = Number(minuteMatch[1]);
+
+    if (Number.isFinite(minutes)) {
+      return Math.round(minutes * 60);
+    }
+  }
+
+  return undefined;
+};
+
+const normalizeSpeaker = (value: unknown, fallback: ScriptSpeakerId): ScriptSpeakerId => {
+  const normalized = String(value ?? fallback).trim().toLowerCase();
+
+  if (normalized.includes("guest")) {
+    return "guest";
+  }
+
+  if (normalized.includes("host")) {
+    return "host";
+  }
+
+  return fallback;
+};
+
+function normalizeScript(raw: unknown, podcastId?: string): PodcastScript {
+  let data = raw;
+
+  while (isRecord(data)) {
+    if (isRecord(data.script)) {
+      data = data.script;
+      continue;
+    }
+
+    if (isRecord(data.podcast)) {
+      data = data.podcast;
+      continue;
+    }
+
+    if (isRecord(data.result)) {
+      data = data.result;
+      continue;
+    }
+
+    break;
+  }
+
+  if (!isRecord(data)) {
+    throw new Error("Script response was not a JSON object");
+  }
+
+  const now = new Date().toISOString();
+  const segmentSource = Array.isArray(data.segments)
+    ? data.segments
+    : Array.isArray(data.scenes)
+      ? data.scenes
+      : Array.isArray(data.sections)
+        ? data.sections
+        : [];
+
+  const segments = segmentSource
+    .map((segment, segmentIndex) => {
+      const source = isRecord(segment) ? segment : {};
+      const turnSource = Array.isArray(source.turns)
+        ? source.turns
+        : Array.isArray(source.dialogue)
+          ? source.dialogue
+          : Array.isArray(source.conversation)
+            ? source.conversation
+            : Array.isArray(source.lines)
+              ? source.lines
+              : [];
+
+      const turns = turnSource
+        .map((turn, turnIndex) => {
+          const item = isRecord(turn) ? turn : {};
+          const text = firstString(item.text, item.content, item.line) ?? "";
+
+          if (text.length === 0) {
+            return null;
+          }
+
+          const fallbackSpeaker: ScriptSpeakerId = turnIndex % 2 === 0 ? "host" : "guest";
+
+          return {
+            id: firstString(item.id) ?? `turn-${segmentIndex + 1}-${turnIndex + 1}`,
+            speakerId: normalizeSpeaker(item.speaker ?? item.role ?? item.speakerId, fallbackSpeaker),
+            text,
+            emotion: firstString(item.emotion),
+            pauseAfterMs:
+              typeof item.pauseAfterMs === "number" && Number.isFinite(item.pauseAfterMs)
+                ? Math.max(0, Math.round(item.pauseAfterMs))
+                : undefined,
+            estimatedDurationSeconds:
+              typeof item.estimatedDurationSeconds === "number" && Number.isFinite(item.estimatedDurationSeconds)
+                ? item.estimatedDurationSeconds
+                : undefined,
+          };
+        })
+        .filter((turn): turn is NonNullable<typeof turn> => turn !== null);
+
+      if (turns.length === 0) {
+        return null;
+      }
+
+      return {
+        id: firstString(source.id) ?? `segment-${segmentIndex + 1}`,
+        title: firstString(source.segmentTitle, source.title, source.name) ?? "Segment",
+        summary: firstString(source.summary, source.description),
+        order:
+          typeof source.order === "number" && Number.isFinite(source.order)
+            ? source.order
+            : segmentIndex,
+        turns,
+      };
+    })
+    .filter((segment): segment is NonNullable<typeof segment> => segment !== null);
+
+  const normalized = {
+    id: firstString(data.id) ?? `script-${crypto.randomUUID()}`,
+    podcastId: firstString(data.podcastId, podcastId) ?? `podcast-${crypto.randomUUID()}`,
+    title: firstString(data.title, data.name) ?? "Podcast",
+    hook: firstString(data.summary, data.description),
+    segments,
+    totalEstimatedDurationSeconds:
+      parseDurationSeconds(data.totalEstimatedDurationSeconds) ??
+      parseDurationSeconds(data.estimatedDurationSec) ??
+      parseDurationSeconds(data.duration) ??
+      300,
+    createdAt: firstString(data.createdAt) ?? now,
+    updatedAt: now,
+  };
+
+  const parsed = podcastScriptSchema.safeParse(normalized);
+
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "Generated script did not match the expected structure");
+  }
+
+  return parsed.data;
+}
+
+async function generateWithGroq(userPrompt: string): Promise<string> {
+  const response = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0.7,
+    max_tokens: 4096,
+    response_format: { type: "json_object" },
+  });
+
+  return response.choices[0].message.content ?? "{}";
+}
+
+async function generateWithGemini(userPrompt: string): Promise<string | null> {
+  const key = process.env.GEMINI_API_KEY;
+
+  if (!key) {
+    return null;
+  }
+
+  const models = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash-8b",
+  ];
+
+  for (const model of models) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+            contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+            generationConfig: {
+              temperature: 0.7,
+              responseMimeType: "application/json",
+            },
+          }),
+        }
+      );
+
+      if (res.status === 429 || res.status === 503) {
+        continue;
+      }
+
+      if (!res.ok) {
+        continue;
+      }
+
+      const data = await res.json();
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (raw) {
+        console.log(`Script generated with Gemini: ${model}`);
+        return raw;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const json = await req.json();
+    const parsed = Body.safeParse(json);
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.flatten() },
+        { status: 400 }
+      );
+    }
+
+    const {
+      topic,
+      audience,
+      format,
+      language,
+      duration,
+      tone,
+      keywords,
+      avoid,
+      podcastId,
+    } = parsed.data;
+
+    const userPrompt = `Topic: ${topic}
+Audience: ${audience}
+Format: ${format}
+Language: ${language}
+Duration: ${duration}
+Tone: ${tone}
+${keywords ? `Include keywords: ${keywords}` : ""}
+${avoid ? `Avoid: ${avoid}` : ""}`;
+
+    let raw: string | null = null;
+
+    if (process.env.GROQ_API_KEY) {
+      try {
+        raw = await generateWithGroq(userPrompt);
+        console.log("RAW GROQ OUTPUT:", raw?.slice(0, 800));
+        console.log("Script generated with Groq llama-3.3-70b");
+      } catch (error) {
+        console.warn("Groq failed, trying Gemini:", error);
+      }
+    }
+
+    if (!raw) {
+      raw = await generateWithGemini(userPrompt);
+    }
+
+    if (!raw) {
+      return NextResponse.json(
+        { error: "All providers failed. Check GROQ_API_KEY in .env.local" },
+        { status: 503 }
+      );
+    }
+
+    try {
+      const clean = raw
+        .replace(/^```json\s*/im, "")
+        .replace(/^```\s*/im, "")
+        .replace(/```\s*$/im, "")
+        .trim();
+
+      const parsedScript = JSON.parse(clean);
+      const script = normalizeScript(parsedScript, podcastId);
+
+      if (!script.segments || script.segments.length === 0) {
+        throw new Error("Script has no segments");
+      }
+
+      if (!script.segments.some((segment) => segment.turns.length >= 2)) {
+        throw new Error("Script segments have no turns");
+      }
+
+      return NextResponse.json({ script });
+    } catch (parseErr: unknown) {
+      const message = parseErr instanceof Error ? parseErr.message : "Unknown parsing error";
+
+      console.error("Script parse error:", message);
+      console.error("Raw output was:", raw?.slice(0, 500));
+
+      return NextResponse.json(
+        { error: `Script parsing failed: ${message}` },
+        { status: 500 }
+      );
+    }
+  } catch (error: unknown) {
+    console.error("Script generation error:", error);
+
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Script generation failed" },
+      { status: 500 }
+    );
+  }
+}
