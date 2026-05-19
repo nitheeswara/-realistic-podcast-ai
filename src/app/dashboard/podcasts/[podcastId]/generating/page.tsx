@@ -47,14 +47,14 @@ export default function GeneratingPage() {
         : null;
 
       if (data?.ownerId !== user.uid) {
-        setMessage("We could not open this render from your account.");
+        setMessage("We could not open this audio job from your account.");
         return;
       }
 
       if (typeof data?.currentJobId === "string") {
         setJobId(data.currentJobId);
       } else {
-        setMessage("No active render is running yet. You can start again from studio settings.");
+        setMessage("No active audio job is running yet. You can start again from voice selection.");
       }
     };
 
@@ -70,14 +70,14 @@ export default function GeneratingPage() {
       doc(db, "jobs", jobId),
       (snapshot) => {
         if (!snapshot.exists()) {
-          setMessage("We could not find this render job. Please retry from studio settings.");
+          setMessage("We could not find this audio job. Please retry from voice selection.");
           return;
         }
 
         const parsed = generationJobSchema.safeParse({ id: snapshot.id, ...snapshot.data() });
 
         if (!parsed.success) {
-          setMessage("The render update is taking longer than expected. AI is busy, retrying...");
+          setMessage("The audio update is taking longer than expected. AI is busy, retrying...");
           return;
         }
 
@@ -117,7 +117,7 @@ export default function GeneratingPage() {
 
     try {
       const token = await user.getIdToken();
-      const response = await fetch("/api/video/generate", {
+      const response = await fetch("/api/podcast/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -154,11 +154,11 @@ export default function GeneratingPage() {
 
   const statusCopy = useMemo(() => {
     if (!job) {
-      return "Connecting to the render job...";
+      return "Connecting to the audio job...";
     }
 
     if (job.status === "failed") {
-      return "The render needs attention.";
+      return "The audio job needs attention.";
     }
 
     if (job.status === "canceled") {
@@ -166,7 +166,7 @@ export default function GeneratingPage() {
     }
 
     if (job.status === "completed") {
-      return "Your video is ready.";
+      return "Your podcast audio is ready.";
     }
 
     return `${Math.round(job.progress)}% complete`;
@@ -190,11 +190,11 @@ export default function GeneratingPage() {
         >
           <div className="space-y-3">
             <p className="w-fit rounded-[8px] border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">
-              Rendering
+              Audio generation
             </p>
             <div>
               <h1 className="text-4xl font-semibold tracking-tight md:text-5xl">
-                Generating video
+                Generating podcast audio
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-gray-400">
                 {statusCopy}

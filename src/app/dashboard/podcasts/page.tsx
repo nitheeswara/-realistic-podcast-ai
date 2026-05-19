@@ -148,7 +148,7 @@ export default function PodcastsPage() {
                 Your podcasts
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-gray-400">
-                Continue a draft, check a render, or start the next episode.
+                Continue a draft, check an audio job, or start the next episode.
               </p>
             </div>
           </div>

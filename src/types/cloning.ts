@@ -1,7 +1,7 @@
 import type { SpeakerRole } from "@/types/voice";
 
-export type CloneType = "voice" | "avatar";
-export type CloneProvider = "elevenlabs" | "heygen";
+export type CloneType = "voice";
+export type CloneProvider = "elevenlabs";
 export type CloneStatus = "not_started" | "queued" | "processing" | "ready" | "failed";
 
 export interface CloningConfig {
@@ -17,10 +17,7 @@ export interface CloningConfig {
   status: CloneStatus;
   trainingStatus: CloneStatus;
   previewUrl?: string;
-  previewImageUrl?: string;
   sourceAudioUrl?: string;
-  sourceImageUrl?: string;
-  sourceVideoUrl?: string;
   consentConfirmed: boolean;
   createdAt: string;
   updatedAt: string;

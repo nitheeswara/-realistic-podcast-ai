@@ -1,13 +1,9 @@
 import { z } from "zod";
 
 import {
-  aspectRatios,
-  backgroundOptions,
-  cameraStyleOptions,
   jobStages,
   languageOptions,
   podcastFormatOptions,
-  subtitleStyles,
   voiceModeOptions,
 } from "@/lib/podcast/constants";
 
@@ -22,14 +18,8 @@ export const podcastLanguageSchema = z.enum(valuesOf(languageOptions));
 export const voiceModeSchema = z.enum(valuesOf(voiceModeOptions));
 export const speakerGenderSchema = z.enum(["male", "female"]);
 export const speakerRoleSchema = z.enum(["host", "guest"]);
-export const voiceProviderSchema = z.enum(["elevenlabs", "sarvam", "gemini", "openai", "custom"]);
-export const avatarProviderSchema = z.enum(["heygen", "did", "synclabs", "custom"]);
-export const avatarModeSchema = z.enum(["stock", "premium", "cloned"]);
+export const voiceProviderSchema = z.enum(["unrealspeech", "elevenlabs", "sarvam", "gemini", "openai", "custom"]);
 export const jobStageSchema = z.enum(tupleValues(jobStages));
-export const backgroundSchema = z.enum(valuesOf(backgroundOptions));
-export const cameraStyleSchema = z.enum(valuesOf(cameraStyleOptions));
-export const subtitleStyleSchema = z.enum(tupleValues(subtitleStyles));
-export const aspectRatioSchema = z.enum(tupleValues(aspectRatios));
 
 export const voiceSchema = z.object({
   id: z.string().min(1),
@@ -41,17 +31,6 @@ export const voiceSchema = z.object({
   accent: z.string().optional(),
   previewUrl: z.string().url().nullable().optional(),
   externalVoiceId: z.string().min(1).optional(),
-});
-
-export const avatarSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  provider: avatarProviderSchema,
-  mode: avatarModeSchema,
-  gender: speakerGenderSchema,
-  previewImageUrl: z.string().url().optional(),
-  previewVideoUrl: z.string().url().optional(),
-  externalAvatarId: z.string().min(1).optional(),
 });
 
 export const scriptTurnSchema = z.object({
@@ -75,6 +54,7 @@ export const podcastScriptSchema = z.object({
   id: z.string().min(1),
   podcastId: z.string().min(1),
   title: z.string().min(1).max(160),
+  language: z.string().min(2).optional(),
   hook: z.string().max(500).optional(),
   segments: z.array(scriptSegmentSchema).min(1).max(8),
   totalEstimatedDurationSeconds: z.number().min(0).max(3600).optional(),
@@ -108,12 +88,6 @@ export const speakerConfigSchema = z.object({
   voice: voiceSchema.optional(),
   clonedVoiceId: z.string().min(1).optional(),
   clonedVoiceName: z.string().min(1).max(120).optional(),
-  avatarMode: avatarModeSchema.default("stock"),
-  avatarId: z.string().min(1).optional(),
-  avatar: avatarSchema.optional(),
-  clonedAvatarId: z.string().min(1).optional(),
-  clonedAvatarName: z.string().min(1).max(120).optional(),
-  clonedAvatarPreviewUrl: z.string().url().optional(),
   speakingStyle: z.string().max(120).optional(),
 });
 
@@ -124,18 +98,13 @@ export const voiceListResponseSchema = z.object({
 export const voicePreviewRequestSchema = z.object({
   voiceId: z.string().min(1),
   text: z.string().trim().min(1).max(1000),
-  provider: z.enum(["elevenlabs", "sarvam", "gemini"]).optional(),
+  provider: z.enum(["unrealspeech", "elevenlabs", "sarvam", "gemini"]).optional(),
   lang: z.string().min(2).optional(),
   speaker: z.string().min(1).optional(),
 });
 
-export const avatarListResponseSchema = z.object({
-  avatars: z.array(avatarSchema),
-});
-
-
-export const cloneTypeSchema = z.enum(["voice", "avatar"]);
-export const cloneProviderSchema = z.enum(["elevenlabs", "heygen"]);
+export const cloneTypeSchema = z.enum(["voice"]);
+export const cloneProviderSchema = z.enum(["elevenlabs"]);
 export const cloneStatusSchema = z.enum(["not_started", "queued", "processing", "ready", "failed"]);
 
 export const cloneRecordSchema = z.object({
@@ -151,10 +120,7 @@ export const cloneRecordSchema = z.object({
   status: cloneStatusSchema,
   trainingStatus: cloneStatusSchema,
   previewUrl: z.string().url().optional(),
-  previewImageUrl: z.string().url().optional(),
   sourceAudioUrl: z.string().url().optional(),
-  sourceImageUrl: z.string().url().optional(),
-  sourceVideoUrl: z.string().url().optional(),
   consentConfirmed: z.boolean(),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
@@ -163,17 +129,7 @@ export const cloneRecordSchema = z.object({
 export const cloneListResponseSchema = z.object({
   clones: z.array(cloneRecordSchema),
 });
-export const videoSettingsSchema = z.object({
-  background: backgroundSchema,
-  backgroundUrl: z.string().url().optional(),
-  cameraStyle: cameraStyleSchema,
-  subtitlesEnabled: z.boolean(),
-  subtitleStyle: subtitleStyleSchema,
-  aspectRatio: aspectRatioSchema,
-  resolution: z.enum(["720p", "1080p", "4k"]),
-});
-
-export const generateVideoRequestSchema = z.object({
+export const generatePodcastRequestSchema = z.object({
   podcastId: z.string().min(1),
   retryJobId: z.string().min(1).optional(),
 });
@@ -191,12 +147,25 @@ export const generationJobSchema = z.object({
   retryJobId: z.string().min(1).optional(),
   status: z.enum(["queued", "running", "completed", "failed", "canceled"]),
   stage: jobStageSchema,
-  stages: z.record(jobStageSchema, stageProgressSchema),
+  stages: z.record(jobStageSchema, stageProgressSchema).optional(),
   progress: z.number().min(0).max(100),
   errorMessage: z.string().optional(),
+  audioUrl: z.string().url().optional(),
+  audioStoragePath: z.string().optional(),
+  audioTurns: z
+    .array(
+      z.object({
+        turnId: z.string().min(1),
+        speakerId: speakerRoleSchema,
+        text: z.string(),
+        durationSeconds: z.number().min(0),
+        startSeconds: z.number().min(0),
+        endSeconds: z.number().min(0),
+      })
+    )
+    .optional(),
   outputUrl: z.string().url().optional(),
   outputStoragePath: z.string().optional(),
-  posterUrl: z.string().url().optional(),
   durationSeconds: z.number().optional(),
   startedAt: z.string().optional(),
   completedAt: z.string().optional(),
@@ -206,7 +175,7 @@ export const generationJobSchema = z.object({
 
 export type CreatePodcastInput = z.infer<typeof createPodcastSchema>;
 export type GenerateScriptRequest = z.infer<typeof generateScriptRequestSchema>;
-export type GenerateVideoRequest = z.infer<typeof generateVideoRequestSchema>;
+export type GeneratePodcastRequest = z.infer<typeof generatePodcastRequestSchema>;
 
 
 

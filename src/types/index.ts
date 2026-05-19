@@ -1,4 +1,3 @@
-export type { Avatar, AvatarMode } from "@/types/avatar";
 export type { CloneListResponse, CloneProvider, CloneStatus, CloneType, CloningConfig } from "@/types/cloning";
 export type {
   GenerationJob,
@@ -19,13 +18,6 @@ export type {
   ScriptSpeakerId,
   ScriptTurn,
 } from "@/types/script";
-export type {
-  AspectRatio,
-  CameraStyle,
-  StudioBackground,
-  SubtitleStyle,
-  VideoSettings,
-} from "@/types/video";
 export type {
   SpeakerConfig,
   SpeakerGender,

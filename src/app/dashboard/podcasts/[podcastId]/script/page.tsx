@@ -103,6 +103,10 @@ type PodcastGenerateDocument = {
   tone?: unknown;
   keywords?: unknown;
   avoid?: unknown;
+  seriesId?: unknown;
+  seriesTitle?: unknown;
+  episodeNumber?: unknown;
+  previousEpisodeSummary?: unknown;
 };
 
 const stringValue = (value: unknown) =>
@@ -233,6 +237,14 @@ export default function ScriptEditorPage() {
         }
 
         const token = await user.getIdToken();
+        const episodeNumber =
+          typeof podcast.episodeNumber === "number" && Number.isFinite(podcast.episodeNumber)
+            ? podcast.episodeNumber
+            : undefined;
+        const seriesId = stringValue(podcast.seriesId);
+        const seriesTitle = stringValue(podcast.seriesTitle);
+        const previousEpisodeSummary = stringValue(podcast.previousEpisodeSummary);
+
         const response = await fetch("/api/scripts/generate", {
           method: "POST",
           headers: {
@@ -251,6 +263,10 @@ export default function ScriptEditorPage() {
             tone: stringValue(podcast.tone) || "conversational",
             keywords: keywordsValue(podcast.keywords),
             avoid: stringValue(podcast.avoid),
+            seriesId: seriesId || undefined,
+            seriesTitle: seriesTitle || undefined,
+            episodeNumber,
+            previousEpisodeSummary: previousEpisodeSummary || undefined,
           }),
         });
 
@@ -466,8 +482,8 @@ export default function ScriptEditorPage() {
               Regenerate full script
             </Button>
             <Button asChild className="h-11 rounded-[8px] bg-amber-300 px-4 text-sm font-semibold text-gray-950 hover:bg-amber-200">
-              <Link href={`/dashboard/podcasts/${podcastId}/voice-avatar`}>
-                Next: Voices & Avatars
+              <Link href={`/dashboard/podcasts/${podcastId}/voice`}>
+                Next: Voices
                 <ArrowRight className="size-4" />
               </Link>
             </Button>

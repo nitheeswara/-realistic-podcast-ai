@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { collection, doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -11,6 +11,14 @@ import type { SubmitHandler } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -46,12 +54,32 @@ const defaultValues: CreatePodcastInput = {
   avoid: "",
 };
 
+const resolveLanguageCode = (value: CreatePodcastInput["language"]) => {
+  const option = languageOptions.find((item) => item.value === value);
+  const code = option?.code ?? value;
+  return code.split("-")[0] ?? code;
+};
+
+interface DuplicatePodcast {
+  id: string;
+  title?: string;
+  seriesTitle?: string;
+  episodeNumber?: number;
+  previousEpisodeSummary?: string;
+  summary?: string;
+  script?: { summary?: string };
+}
+
 export default function CreatePodcastPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
   const [step, setStep] = useState<1 | 2>(1);
   const [keywordText, setKeywordText] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [duplicateMatches, setDuplicateMatches] = useState<DuplicatePodcast[]>([]);
+  const [pendingValues, setPendingValues] = useState<CreatePodcastInput | null>(null);
+  const [pendingKeywords, setPendingKeywords] = useState<string[]>([]);
 
   const {
     register,
@@ -114,34 +142,126 @@ export default function CreatePodcastPage() {
       return;
     }
 
+    const duplicates = await checkDuplicateTopic(parsed.data.topic, user.uid);
+    if (duplicates.length > 0) {
+      setDuplicateMatches(duplicates);
+      setPendingValues(parsed.data);
+      setPendingKeywords(normalizedKeywords);
+      setDuplicateOpen(true);
+      return;
+    }
+
+    await createPodcast(parsed.data, normalizedKeywords, {
+      episodeNumber: 1,
+      seriesId: null,
+      seriesTitle: null,
+      previousEpisodeSummary: null,
+    });
+  };
+
+  const checkDuplicateTopic = async (topic: string, userId: string) => {
+    const snap = await getDocs(
+      query(
+        collection(db, "podcasts"),
+        where("ownerId", "==", userId),
+        where("topic", "==", topic)
+      )
+    );
+    return snap.docs.map((docRef) => ({ id: docRef.id, ...(docRef.data() as Omit<DuplicatePodcast, "id">) }));
+  };
+
+  const createPodcast = async (
+    values: CreatePodcastInput,
+    keywords: string[],
+    series: {
+      episodeNumber: number;
+      seriesId: string | null;
+      seriesTitle: string | null;
+      previousEpisodeSummary: string | null;
+    }
+  ) => {
+    if (!user) {
+      return;
+    }
+
+    const storedLanguage = resolveLanguageCode(values.language);
+
     const podcastRef = doc(collection(db, "podcasts"));
 
     await setDoc(podcastRef, {
       id: podcastRef.id,
-      ...parsed.data,
+      ...values,
       userId: user.uid,
       ownerId: user.uid,
-      title: parsed.data.topic,
-      topic: parsed.data.topic,
-      audience: parsed.data.audience,
-      format: parsed.data.format,
-      language: parsed.data.language,
-      duration: `${parsed.data.durationMinutes} minutes`,
-      durationMinutes: parsed.data.durationMinutes,
-      tone: parsed.data.tone,
-      keywords: parsed.data.keywords,
-      avoid: parsed.data.avoid,
-      description: `${parsed.data.format} podcast for ${parsed.data.audience}`,
+      title: values.topic,
+      topic: values.topic,
+      audience: values.audience,
+      format: values.format,
+      language: storedLanguage,
+      duration: `${values.durationMinutes} minutes`,
+      durationMinutes: values.durationMinutes,
+      tone: values.tone,
+      keywords,
+      avoid: values.avoid,
+      description: `${values.format} podcast for ${values.audience}`,
       status: "draft",
       currentStep: "script",
       scriptVersion: 0,
       speakers: [],
       creditsSpent: 0,
+      episodeNumber: series.episodeNumber,
+      seriesId: series.seriesId,
+      seriesTitle: series.seriesTitle,
+      previousEpisodeSummary: series.previousEpisodeSummary,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
 
     router.push(`/dashboard/podcasts/${podcastRef.id}/script`);
+  };
+
+  const handleDuplicateChoice = async (choice: "new" | "continue" | "change") => {
+    if (!pendingValues) {
+      setDuplicateOpen(false);
+      return;
+    }
+
+    if (choice === "change") {
+      setDuplicateOpen(false);
+      return;
+    }
+
+    const primary = duplicateMatches[0];
+    if (choice === "continue" && !primary?.id) {
+      setDuplicateOpen(false);
+      return;
+    }
+    const existingSummary =
+      typeof primary?.previousEpisodeSummary === "string"
+        ? primary.previousEpisodeSummary
+        : typeof primary?.summary === "string"
+          ? primary.summary
+          : typeof (primary?.script as { summary?: unknown } | undefined)?.summary === "string"
+            ? (primary?.script as { summary?: string }).summary
+            : "";
+    const existingSeriesTitle =
+      typeof primary?.seriesTitle === "string"
+        ? primary.seriesTitle
+        : typeof primary?.title === "string"
+          ? primary.title
+          : pendingValues.topic;
+    const episodeNumbers = duplicateMatches
+      .map((match) => (typeof match.episodeNumber === "number" ? match.episodeNumber : 1));
+    const nextEpisode = Math.max(1, ...episodeNumbers) + 1;
+
+    await createPodcast(pendingValues, pendingKeywords, {
+      episodeNumber: choice === "continue" ? nextEpisode : 1,
+      seriesId: choice === "continue" ? primary.id : null,
+      seriesTitle: choice === "continue" ? existingSeriesTitle : null,
+      previousEpisodeSummary: choice === "continue" ? existingSummary : null,
+    });
+
+    setDuplicateOpen(false);
   };
 
   if (loading || !user) {
@@ -404,6 +524,49 @@ export default function CreatePodcastPage() {
           </CardContent>
         </Card>
       </section>
+
+      <Dialog open={duplicateOpen} onOpenChange={setDuplicateOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Similar podcast found!</DialogTitle>
+            <DialogDescription>
+              You already have a podcast on this topic: "{duplicateMatches[0]?.title ?? pendingValues?.topic}".
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-xs text-gray-400">
+            <p>What would you like to do?</p>
+            <div className="grid gap-3">
+              <button
+                type="button"
+                onClick={() => void handleDuplicateChoice("new")}
+                className="rounded-[10px] border border-white/10 bg-white/5 p-4 text-left text-sm text-white hover:border-white/20"
+              >
+                <p className="text-base font-semibold">New Episode</p>
+                <p className="mt-1 text-xs text-gray-400">Generate a fresh script on the same topic.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDuplicateChoice("continue")}
+                className="rounded-[10px] border border-white/10 bg-white/5 p-4 text-left text-sm text-white hover:border-white/20"
+              >
+                <p className="text-base font-semibold">Continue Series</p>
+                <p className="mt-1 text-xs text-gray-400">Create Episode 2 that continues from Episode 1.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDuplicateChoice("change")}
+                className="rounded-[10px] border border-white/10 bg-white/5 p-4 text-left text-sm text-white hover:border-white/20"
+              >
+                <p className="text-base font-semibold">Change Topic</p>
+                <p className="mt-1 text-xs text-gray-400">Go back and enter a different topic.</p>
+              </button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDuplicateOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

@@ -1,6 +1,5 @@
-import type { GenerationJob } from "@/types/jobs";
+import type { AudioTurnTiming, GenerationJob } from "@/types/jobs";
 import type { PodcastScript } from "@/types/script";
-import type { VideoSettings } from "@/types/video";
 import type { SpeakerConfig } from "@/types/voice";
 
 export type PodcastStatus =
@@ -39,7 +38,6 @@ export type PodcastCloningPreset =
   | "clone_guest"
   | "clone_both"
   | "clone_host_voice"
-  | "clone_guest_avatar"
   | "custom";
 
 export interface Podcast {
@@ -61,13 +59,11 @@ export interface Podcast {
   guest?: SpeakerConfig;
   speakers: SpeakerConfig[];
   script?: PodcastScript;
-  videoSettings?: VideoSettings;
   cloningPreset?: PodcastCloningPreset;
   activeJob?: GenerationJob;
   currentJobId?: string;
   audioUrl?: string;
-  videoUrl?: string;
-  posterUrl?: string;
+  audioTurns?: AudioTurnTiming[];
   thumbnailUrl?: string;
   durationSeconds?: number;
   creditsSpent: number;

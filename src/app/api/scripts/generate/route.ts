@@ -19,34 +19,168 @@ const Body = z.object({
   podcastId: z.string().min(1).optional(),
   existingScript: z.unknown().optional(),
   segmentId: z.string().min(1).optional(),
+  seriesId: z.string().min(1).optional(),
+  seriesTitle: z.string().min(1).optional(),
+  episodeNumber: z.number().int().min(1).optional(),
+  previousEpisodeSummary: z.string().min(1).optional(),
 });
 
-const SYSTEM_PROMPT = `You are a podcast scriptwriter.
-You must respond with ONLY a JSON object. No text before or after.
-No markdown. No code fences. No explanation.
+function getDurationTarget(duration: string) {
+  const numbers = duration.match(/\d+/g)?.map(Number) ?? [5];
+  const mins = Math.max(...numbers);
+  const clampedMins = Math.max(1, Math.min(60, mins));
+  const wordsPerMin = 130;
+  const totalWords = clampedMins * wordsPerMin;
+  const totalTurns = Math.ceil(totalWords / 40);
+  const totalSegments = Math.max(2, Math.ceil(totalTurns / 4));
 
-The JSON must have EXACTLY these fields:
+  return {
+    mins: clampedMins,
+    totalWords,
+    totalTurns,
+    totalSegments,
+    estimatedDurationSec: clampedMins * 60,
+  };
+}
+
+const normalizeLanguageCode = (language: string) => {
+  const raw = language.trim().toLowerCase();
+  const base = raw.split("-")[0] ?? "en";
+  const map: Record<string, string> = {
+    en: "en",
+    english: "en",
+    hi: "hi",
+    hindi: "hi",
+    ta: "ta",
+    tamil: "ta",
+    te: "te",
+    telugu: "te",
+    ml: "ml",
+    malayalam: "ml",
+    kn: "kn",
+    kannada: "kn",
+    es: "es",
+    spanish: "es",
+    fr: "fr",
+    french: "fr",
+    bn: "bn",
+    bengali: "bn",
+    mr: "mr",
+    marathi: "mr",
+    gu: "gu",
+    gujarati: "gu",
+    pa: "pa",
+    punjabi: "pa",
+  };
+
+  return map[base] ?? base;
+};
+
+function getLanguageSpecificInstructions(language: string): string {
+  const code = normalizeLanguageCode(language);
+
+  const instructions: Record<string, string> = {
+    ta: "Write in natural conversational Tamil as spoken in Tamil Nadu. Use common Tamil expressions like \"இல்லையா?\", \"சரிதானே?\", \"பாருங்க\". Mix in natural Tamil sentence patterns. Do not translate English phrases literally. Use words Tamil speakers actually use in daily conversation.",
+    hi: "Write in natural conversational Hindi as spoken in India. Use common expressions like \"यार\", \"देखो\", \"सच में\", \"बिल्कुल सही\". Mix Hinglish naturally where appropriate (as Indians actually speak). Use words and phrases from everyday Hindi conversation.",
+    te: "Write in natural conversational Telugu. Use common expressions like \"అవునా?\", \"చూడండి\", \"నిజమే\". Natural Telugu sentence structure and common conversational phrases.",
+    ml: "Write in natural conversational Malayalam. Use common expressions like \"അല്ലേ?\", \"ശരിയാണ്\", \"നോക്കൂ\". Natural Malayalam flow as spoken in Kerala.",
+    kn: "Write in natural conversational Kannada. Use common expressions like \"ಅಲ್ವಾ?\", \"ನೋಡಿ\", \"ನಿಜವಾಗಿಯೂ\". Natural Kannada as spoken in Karnataka.",
+    en: "Write in natural American/British English as spoken in conversation. Use contractions, filler words, and natural speech patterns. Make it sound like a real podcast recording.",
+    es: "Write in natural conversational Spanish. Use common expressions and natural speech patterns. Sound like real people talking, not a textbook.",
+  };
+
+  return instructions[code] ?? `Write in natural conversational ${language}. Use common expressions and natural speech patterns native speakers use.`;
+}
+
+function buildStrictPrompt(
+  target: ReturnType<typeof getDurationTarget>,
+  language: string,
+  langInstructions: string
+): string {
+  return `You are a podcast scriptwriter. Return ONLY valid JSON, nothing else.
+
+TARGET: ${target.mins}-minute podcast = ${target.totalWords} words = ${target.totalTurns} turns
+
+MANDATORY REQUIREMENTS — YOU MUST FOLLOW ALL OF THESE:
+1. Total word count across ALL turns: ${target.totalWords} words MINIMUM
+2. Total number of turns: ${target.totalTurns} turns MINIMUM
+3. Number of segments: ${target.totalSegments} segments
+4. Each turn: 30 to 60 words (NEVER shorter than 30 words)
+5. Each segment: 3 to 5 turns
+
+If you write fewer than ${target.totalWords} words, you have FAILED the task.
+Count your words carefully. ${target.mins} minutes × 130 words/min = ${target.totalWords} words.
+
+LANGUAGE: ${language}
+${langInstructions}
+
+JSON structure:
 {
-  "title": "Episode title here",
-  "summary": "Brief summary here",
-  "estimatedDurationSec": 300,
-  "language": "en",
+  "title": "string",
+  "summary": "string",
+  "estimatedDurationSec": ${target.estimatedDurationSec},
+  "language": "${language}",
   "segments": [
     {
-      "segmentTitle": "Opening",
+      "segmentTitle": "string",
       "turns": [
-        { "speaker": "host", "text": "What the host says" },
-        { "speaker": "guest", "text": "What the guest says" }
+        { "speaker": "host", "text": "At least 30 words here. Make it conversational and natural. The host asks thoughtful questions or shares insights." },
+        { "speaker": "guest", "text": "At least 40 words here. Give detailed, informative answers with examples. Do not give one-sentence answers." },
+        { "speaker": "host", "text": "Follow-up comment or question, at least 30 words. React to what guest said." },
+        { "speaker": "guest", "text": "Detailed response, at least 40 words with specifics and examples." }
       ]
     }
   ]
 }
 
-CRITICAL RULES:
-- speaker must be exactly "host" or "guest" in lowercase
-- Every segment must have at least 2 turns
-- turns must alternate between host and guest
-- Return ONLY the JSON object, nothing else at all`;
+CONVERSATION STYLE:
+- Natural speech: contractions (I'm, it's, we're), filler words (you know, actually, look)
+- Host: curious, engaged, asks follow-ups, reacts with "Wow", "That's interesting"
+- Guest: knowledgeable, gives examples, passionate about the topic
+- NOT formal academic language — real people talking
+
+Return ONLY the JSON object.`;
+}
+
+function buildUserPrompt(
+  topic: string,
+  audience: string,
+  format: string,
+  language: string,
+  target: ReturnType<typeof getDurationTarget>,
+  tone: string,
+  keywords: string,
+  avoid: string,
+  seriesContext?: string
+): string {
+  return `Generate a ${target.mins}-minute podcast.
+
+Topic: ${topic}
+Audience: ${audience}
+Format: ${format}
+Language: ${language}
+Tone: ${tone}
+${keywords ? `Must include: ${keywords}` : ""}
+${avoid ? `Avoid: ${avoid}` : ""}
+${seriesContext ?? ""}
+
+YOU MUST WRITE:
+- Exactly ${target.totalSegments} segments
+- At least ${target.totalTurns} total turns
+- At least ${target.totalWords} total words
+- Each turn must be 30-60 words long
+
+Do not write a short script. Write the FULL ${target.mins}-minute podcast.`;
+}
+
+function countScriptWords(script: any): number {
+  const turns = script?.segments?.flatMap((segment: any) => segment.turns ?? []) ?? [];
+  return turns.reduce((sum: number, turn: any) => sum + String(turn.text ?? "").trim().split(/\s+/).length, 0);
+}
+
+function countScriptTurns(script: any): number {
+  return script?.segments?.flatMap((segment: any) => segment.turns ?? []).length ?? 0;
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -237,11 +371,11 @@ function normalizeScript(raw: unknown, podcastId?: string): PodcastScript {
   return parsed.data;
 }
 
-async function generateWithGroq(userPrompt: string): Promise<string> {
+async function generateWithGroq(userPrompt: string, systemPrompt: string): Promise<string> {
   const response = await groq.chat.completions.create({
     model: "llama-3.3-70b-versatile",
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     temperature: 0.7,
@@ -252,7 +386,7 @@ async function generateWithGroq(userPrompt: string): Promise<string> {
   return response.choices[0].message.content ?? "{}";
 }
 
-async function generateWithGemini(userPrompt: string): Promise<string | null> {
+async function generateWithGemini(userPrompt: string, systemPrompt: string): Promise<string | null> {
   const key = process.env.GEMINI_API_KEY;
 
   if (!key) {
@@ -274,7 +408,7 @@ async function generateWithGemini(userPrompt: string): Promise<string | null> {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+            system_instruction: { parts: [{ text: systemPrompt }] },
             contents: [{ role: "user", parts: [{ text: userPrompt }] }],
             generationConfig: {
               temperature: 0.7,
@@ -329,70 +463,112 @@ export async function POST(req: NextRequest) {
       keywords,
       avoid,
       podcastId,
+      seriesId,
+      seriesTitle,
+      episodeNumber,
+      previousEpisodeSummary,
     } = parsed.data;
 
-    const userPrompt = `Topic: ${topic}
-Audience: ${audience}
-Format: ${format}
-Language: ${language}
-Duration: ${duration}
-Tone: ${tone}
-${keywords ? `Include keywords: ${keywords}` : ""}
-${avoid ? `Avoid: ${avoid}` : ""}`;
+    const target = getDurationTarget(duration);
+    const langInstructions = getLanguageSpecificInstructions(language);
+    const systemPrompt = buildStrictPrompt(target, language, langInstructions);
+    const seriesContext = seriesId && episodeNumber && previousEpisodeSummary
+      ? `${seriesTitle ? `Series: ${seriesTitle}\n` : ""}This is Episode ${episodeNumber} continuing from Episode ${episodeNumber - 1}.
+The previous episode covered: ${previousEpisodeSummary}.
+Continue the conversation naturally from where it left off.
+Do not repeat what was covered in Episode 1.`
+      : undefined;
+    const userPrompt = buildUserPrompt(
+      topic,
+      audience,
+      format,
+      language,
+      target,
+      tone,
+      keywords,
+      avoid,
+      seriesContext
+    );
 
-    let raw: string | null = null;
+    let script: PodcastScript | null = null;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 3;
 
-    if (process.env.GROQ_API_KEY) {
+    while (attempts < MAX_ATTEMPTS) {
+      attempts += 1;
+      let raw: string | null = null;
+
+      if (process.env.GROQ_API_KEY) {
+        try {
+          raw = await generateWithGroq(userPrompt, systemPrompt);
+        } catch (error) {
+          console.warn(`Groq attempt ${attempts} failed:`, error);
+        }
+      }
+
+      if (!raw) {
+        raw = await generateWithGemini(userPrompt, systemPrompt);
+      }
+
+      if (!raw) {
+        if (attempts >= MAX_ATTEMPTS) {
+          throw new Error("All providers failed");
+        }
+        continue;
+      }
+
       try {
-        raw = await generateWithGroq(userPrompt);
-        console.log("RAW GROQ OUTPUT:", raw?.slice(0, 800));
-        console.log("Script generated with Groq llama-3.3-70b");
-      } catch (error) {
-        console.warn("Groq failed, trying Gemini:", error);
+        const clean = raw
+          .replace(/^```json\s*/im, "")
+          .replace(/^```\s*/im, "")
+          .replace(/```\s*$/im, "")
+          .trim();
+
+        const parsedScript = JSON.parse(clean);
+        const normalized = normalizeScript(parsedScript, podcastId);
+
+        const wordCount = countScriptWords(normalized);
+        const turnCount = countScriptTurns(normalized);
+
+        console.log(
+          `Attempt ${attempts}: ${turnCount} turns, ${wordCount} words ` +
+          `(needed: ${target.totalTurns} turns, ${target.totalWords} words)`
+        );
+
+        const minAcceptableWords = Math.floor(target.totalWords * 0.7);
+        const minAcceptableTurns = Math.floor(target.totalTurns * 0.7);
+        if (wordCount >= minAcceptableWords && turnCount >= minAcceptableTurns) {
+          script = normalized;
+          console.log(`Script accepted on attempt ${attempts}: ${wordCount} words, ${turnCount} turns`);
+          break;
+        }
+
+        console.warn(
+          `Script too short (attempt ${attempts}): ${wordCount}/${target.totalWords} words. ` +
+          (attempts < MAX_ATTEMPTS ? "Retrying..." : "Using best result so far.")
+        );
+
+        if (!script || wordCount > countScriptWords(script)) {
+          script = normalized;
+        }
+      } catch (parseErr: unknown) {
+        const message = parseErr instanceof Error ? parseErr.message : "Unknown parsing error";
+        console.error(`Parse error attempt ${attempts}:`, message);
+        if (attempts >= MAX_ATTEMPTS) {
+          throw new Error("Script parsing failed after all retries");
+        }
       }
     }
 
-    if (!raw) {
-      raw = await generateWithGemini(userPrompt);
+    if (!script) {
+      throw new Error("Failed to generate valid script");
     }
 
-    if (!raw) {
-      return NextResponse.json(
-        { error: "All providers failed. Check GROQ_API_KEY in .env.local" },
-        { status: 503 }
-      );
-    }
+    const finalWordCount = countScriptWords(script);
+    const finalTurnCount = countScriptTurns(script);
+    console.log(`Final script: ${finalTurnCount} turns, ${finalWordCount} words, target: ${target.totalWords} words`);
 
-    try {
-      const clean = raw
-        .replace(/^```json\s*/im, "")
-        .replace(/^```\s*/im, "")
-        .replace(/```\s*$/im, "")
-        .trim();
-
-      const parsedScript = JSON.parse(clean);
-      const script = normalizeScript(parsedScript, podcastId);
-
-      if (!script.segments || script.segments.length === 0) {
-        throw new Error("Script has no segments");
-      }
-
-      if (!script.segments.some((segment) => segment.turns.length >= 2)) {
-        throw new Error("Script segments have no turns");
-      }
-
-      return NextResponse.json({ script });
-    } catch (parseErr: unknown) {
-      const message = parseErr instanceof Error ? parseErr.message : "Unknown parsing error";
-
-      console.error("Script parse error:", message);
-      console.error("Raw output was:", raw?.slice(0, 500));
-
-      return NextResponse.json(
-        { error: `Script parsing failed: ${message}` },
-        { status: 500 }
-      );
-    }
+    return NextResponse.json({ script });
   } catch (error: unknown) {
     console.error("Script generation error:", error);
 

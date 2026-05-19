@@ -6,16 +6,18 @@ import type { Variants } from "framer-motion";
 import {
   AudioLines,
   BadgeCheck,
-  Clapperboard,
-  Film,
   LogOut,
   Plus,
   Sparkles,
+  Trash2,
+  Pencil,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
+import { EditPodcastModal } from "@/components/dashboard/EditPodcastModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,19 +35,25 @@ import type { PodcastStatus } from "@/types/podcast";
 interface UserProfile {
   credits?: unknown;
   name?: unknown;
-  videosGenerated?: unknown;
+  podcastsGenerated?: unknown;
 }
 
 interface DashboardPodcast {
   id: string;
   title: string;
+  topic?: string;
+  audience?: string;
   status: PodcastStatus;
-  posterUrl?: string;
-  videoUrl?: string;
+  audioUrl?: string;
   durationSeconds?: number;
   createdAt?: unknown;
   updatedAt?: unknown;
   language?: string;
+  host?: { voiceId?: string; voiceName?: string };
+  guest?: { voiceId?: string; voiceName?: string };
+  seriesId?: string;
+  seriesTitle?: string;
+  episodeNumber?: number;
 }
 
 const containerVariants: Variants = {
@@ -82,9 +90,9 @@ const featureCards = [
     icon: AudioLines,
   },
   {
-    title: "Video Stage",
-    description: "Render HeyGen avatar scenes and final MP4 exports.",
-    icon: Clapperboard,
+    title: "Audio Export",
+    description: "Generate alternating host and guest dialogue as one MP3.",
+    icon: AudioLines,
   },
 ] as const;
 
@@ -112,6 +120,30 @@ const numberFromData = (data: Record<string, unknown>, key: string) => {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 };
 
+const speakerFromData = (data: Record<string, unknown>, key: string) => {
+  const raw = data[key];
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const speaker = raw as Record<string, unknown>;
+  const voiceId = typeof speaker.voiceId === "string" ? speaker.voiceId : undefined;
+  let voiceName: string | undefined;
+
+  if (typeof speaker.voiceName === "string") {
+    voiceName = speaker.voiceName;
+  } else if (typeof speaker.name === "string") {
+    voiceName = speaker.name;
+  } else if (typeof speaker.voice === "object" && speaker.voice !== null) {
+    const voice = speaker.voice as Record<string, unknown>;
+    if (typeof voice.name === "string") {
+      voiceName = voice.name;
+    }
+  }
+
+  return voiceId || voiceName ? { voiceId, voiceName } : undefined;
+};
+
 const dateMs = (value: unknown) => {
   if (typeof value === "object" && value !== null && "toDate" in value) {
     return (value as { toDate: () => Date }).toDate().getTime();
@@ -131,23 +163,13 @@ const formatDate = (value: unknown) => {
 
 const formatDuration = (seconds?: number) => {
   if (!seconds) {
-    return "Not rendered yet";
+    return "No audio yet";
   }
 
   const rounded = Math.max(1, Math.round(seconds));
   const minutes = Math.floor(rounded / 60);
   const rest = rounded % 60;
   return `${minutes}:${rest.toString().padStart(2, "0")}`;
-};
-
-const firstFrameFromCloudinary = (videoUrl?: string) => {
-  if (!videoUrl || !videoUrl.includes("/video/upload/")) {
-    return undefined;
-  }
-
-  return videoUrl
-    .replace("/video/upload/", "/video/upload/so_0/")
-    .replace(/\.(mp4|mov|webm)(\?.*)?$/i, ".jpg");
 };
 
 const podcastHref = (podcast: DashboardPodcast) => {
@@ -171,10 +193,11 @@ export default function DashboardPage() {
   const { user, loading, signOut } = useAuth();
   const [profileName, setProfileName] = useState<string | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
-  const [videosGenerated, setVideosGenerated] = useState(0);
+  const [podcastsGenerated, setPodcastsGenerated] = useState(0);
   const [credits, setCredits] = useState(3);
   const [podcasts, setPodcasts] = useState<DashboardPodcast[]>([]);
   const [podcastsLoading, setPodcastsLoading] = useState(true);
+  const [editingPodcast, setEditingPodcast] = useState<DashboardPodcast | null>(null);
   const [loadMessage, setLoadMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -216,8 +239,8 @@ export default function DashboardPage() {
             ? profile.name.trim()
             : null;
         const generated =
-          typeof profile?.videosGenerated === "number" && Number.isFinite(profile.videosGenerated)
-            ? profile.videosGenerated
+          typeof profile?.podcastsGenerated === "number" && Number.isFinite(profile.podcastsGenerated)
+            ? profile.podcastsGenerated
             : 0;
         const creditLimit =
           typeof profile?.credits === "number" && Number.isFinite(profile.credits)
@@ -235,19 +258,25 @@ export default function DashboardPage() {
             return {
               id: item.id,
               title: stringFromData(data, "title", "Untitled podcast"),
+              topic: stringFromData(data, "topic") || undefined,
+              audience: stringFromData(data, "audience") || undefined,
               status,
-              posterUrl: stringFromData(data, "posterUrl") || stringFromData(data, "thumbnailUrl") || undefined,
-              videoUrl: stringFromData(data, "videoUrl") || undefined,
+              audioUrl: stringFromData(data, "audioUrl") || undefined,
               durationSeconds: numberFromData(data, "durationSeconds"),
               createdAt: data.createdAt,
               updatedAt: data.updatedAt,
               language: stringFromData(data, "language") || undefined,
+              seriesId: stringFromData(data, "seriesId") || undefined,
+              seriesTitle: stringFromData(data, "seriesTitle") || undefined,
+              episodeNumber: numberFromData(data, "episodeNumber"),
+              host: speakerFromData(data, "host"),
+              guest: speakerFromData(data, "guest"),
             };
           })
           .sort((a, b) => dateMs(b.updatedAt ?? b.createdAt) - dateMs(a.updatedAt ?? a.createdAt));
 
         setProfileName(storedName ?? user.displayName ?? user.email);
-        setVideosGenerated(generated);
+        setPodcastsGenerated(generated);
         setCredits(creditLimit);
         setPodcasts(nextPodcasts);
       } catch {
@@ -278,11 +307,38 @@ export default function DashboardPage() {
     return `Welcome back${profileName ? `, ${profileName}` : ""}`;
   }, [loading, profileLoading, profileName]);
 
-  const creditsRemaining = Math.max(0, credits - videosGenerated);
+  const creditsRemaining = Math.max(0, credits - podcastsGenerated);
 
   const handleSignOut = async () => {
     await signOut();
     router.replace("/login");
+  };
+
+  const handleDeletePodcast = async (podcastId: string) => {
+    if (!user) {
+      return;
+    }
+
+    if (!window.confirm("Delete this podcast? This cannot be undone.")) {
+      return;
+    }
+
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`/api/podcasts/${podcastId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error("Delete failed");
+      }
+
+      setPodcasts((prev) => prev.filter((podcast) => podcast.id !== podcastId));
+      toast.success("Podcast deleted");
+    } catch {
+      toast.error("Failed to delete podcast");
+    }
   };
 
   if (loading || (!user && !loading)) {
@@ -307,7 +363,7 @@ export default function DashboardPage() {
                 {greeting}
               </h1>
               <p className="max-w-2xl text-sm leading-6 text-gray-400 md:text-base">
-                Shape scripts, voices, HeyGen avatar videos, and final podcast exports from one focused production desk.
+                Shape scripts, voices, and final podcast audio from one focused production desk.
               </p>
             </div>
           </div>
@@ -335,9 +391,9 @@ export default function DashboardPage() {
         </header>
 
         <section className="grid gap-4 md:grid-cols-3">
-          <MetricCard label="Videos generated" value={String(videosGenerated)} description="Successful MP4 exports" />
-          <MetricCard label="Credits remaining" value={String(creditsRemaining)} description={`${videosGenerated}/${credits} credits used`} />
-          <MetricCard label="Active projects" value={String(podcasts.length)} description="Drafts, renders, and results" />
+          <MetricCard label="Podcasts generated" value={String(podcastsGenerated)} description="Successful MP3 exports" />
+          <MetricCard label="Credits remaining" value={String(creditsRemaining)} description={`${podcastsGenerated}/${credits} credits used`} />
+          <MetricCard label="Active projects" value={String(podcasts.length)} description="Drafts, audio jobs, and results" />
         </section>
 
         {loadMessage ? (
@@ -382,7 +438,7 @@ export default function DashboardPage() {
             <CardHeader className="border-b border-white/10 px-6 py-5">
               <CardTitle className="text-xl text-white">Your podcasts</CardTitle>
               <CardDescription className="text-sm text-gray-400">
-                Completed renders open directly to the result page. Drafts continue where you left off.
+                Completed podcasts open directly to the result page. Drafts continue where you left off.
               </CardDescription>
             </CardHeader>
             <CardContent className="p-6">
@@ -393,16 +449,42 @@ export default function DashboardPage() {
               ) : podcasts.length === 0 ? (
                 <EmptyState />
               ) : (
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {podcasts.map((podcast) => (
-                    <PodcastCard key={podcast.id} podcast={podcast} />
-                  ))}
-                </div>
+                <PodcastGroups
+                  podcasts={podcasts}
+                  onDelete={handleDeletePodcast}
+                  onEdit={setEditingPodcast}
+                />
               )}
             </CardContent>
           </Card>
         </motion.section>
       </section>
+      {editingPodcast ? (
+        <EditPodcastModal
+          open={!!editingPodcast}
+          onClose={() => setEditingPodcast(null)}
+          podcast={{
+            ...editingPodcast,
+            topic: editingPodcast.topic ?? "",
+            audience: editingPodcast.audience ?? "",
+            language: editingPodcast.language ?? "en",
+          }}
+          onSaved={(updated) => {
+            setPodcasts((prev) =>
+              prev.map((podcast) =>
+                podcast.id === editingPodcast.id
+                  ? { ...podcast, ...updated }
+                  : podcast
+              )
+            );
+            setEditingPodcast(null);
+          }}
+          onRegenerate={() => {
+            router.push(`/dashboard/podcasts/${editingPodcast.id}/voice`);
+            setEditingPodcast(null);
+          }}
+        />
+      ) : null}
     </main>
   );
 }
@@ -436,7 +518,7 @@ function EmptyState() {
       <div className="space-y-2">
         <h2 className="text-2xl font-semibold text-white">Create your first podcast</h2>
         <p className="max-w-md text-sm leading-6 text-gray-400">
-          Start with a topic and we will walk it through script, voices, avatars, and final video.
+          Start with a topic and we will walk it through script, voices, and final audio.
         </p>
       </div>
       <Button
@@ -452,50 +534,139 @@ function EmptyState() {
   );
 }
 
-function PodcastCard({ podcast }: { podcast: DashboardPodcast }) {
-  const href = podcastHref(podcast);
-  const thumbnail = firstFrameFromCloudinary(podcast.videoUrl) ?? podcast.posterUrl;
+function PodcastGroups({
+  podcasts,
+  onDelete,
+  onEdit,
+}: {
+  podcasts: DashboardPodcast[];
+  onDelete: (podcastId: string) => void;
+  onEdit: (podcast: DashboardPodcast) => void;
+}) {
+  const seriesGroups = new Map<string, DashboardPodcast[]>();
+  const standalone: DashboardPodcast[] = [];
+
+  podcasts.forEach((podcast) => {
+    if (podcast.seriesId) {
+      const list = seriesGroups.get(podcast.seriesId) ?? [];
+      list.push(podcast);
+      seriesGroups.set(podcast.seriesId, list);
+    } else {
+      standalone.push(podcast);
+    }
+  });
 
   return (
-    <Link
-      href={href}
+    <div className="space-y-6">
+      {Array.from(seriesGroups.entries()).map(([seriesId, items]) => {
+        const sorted = [...items].sort((a, b) => (a.episodeNumber ?? 0) - (b.episodeNumber ?? 0));
+        const seriesTitle = sorted[0]?.seriesTitle ?? sorted[0]?.title ?? "Series";
+
+        return (
+          <section key={seriesId} className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">Series</p>
+                <h3 className="text-lg font-semibold text-white">{seriesTitle}</h3>
+              </div>
+              <Badge variant="outline" className="rounded-[8px] border-white/10 bg-white/5 text-gray-300">
+                {sorted.length} episodes
+              </Badge>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {sorted.map((podcast) => (
+                <PodcastCard
+                  key={podcast.id}
+                  podcast={podcast}
+                  onDelete={onDelete}
+                  onEdit={onEdit}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
+      {standalone.length > 0 ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {standalone.map((podcast) => (
+            <PodcastCard
+              key={podcast.id}
+              podcast={podcast}
+              onDelete={onDelete}
+              onEdit={onEdit}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PodcastCard({
+  podcast,
+  onDelete,
+  onEdit,
+}: {
+  podcast: DashboardPodcast;
+  onDelete: (podcastId: string) => void;
+  onEdit: (podcast: DashboardPodcast) => void;
+}) {
+  const href = podcastHref(podcast);
+
+  return (
+    <div
       className={cn(
-        "group overflow-hidden rounded-[10px] border border-white/10 bg-gray-950/70 transition hover:-translate-y-0.5 hover:border-amber-300/40 hover:bg-gray-900",
+        "group relative overflow-hidden rounded-[10px] border border-white/10 bg-gray-950/70 transition hover:-translate-y-0.5 hover:border-amber-300/40 hover:bg-gray-900",
         podcast.status !== "completed" && "hover:border-white/20"
       )}
     >
-      <div className="relative aspect-video overflow-hidden bg-gradient-to-br from-gray-900 via-gray-800 to-amber-950/40">
-        {thumbnail ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={thumbnail}
-            alt=""
-            className="size-full object-cover opacity-90 transition duration-500 group-hover:scale-105"
-          />
-        ) : (
-          <div className="flex size-full items-center justify-center text-amber-200">
-            <Film className="size-10" />
+      <Link href={href} className="block">
+        <div className="relative flex h-36 items-center justify-center overflow-hidden bg-gradient-to-br from-gray-900 via-gray-800 to-amber-950/40">
+          <AudioLines className="size-10 text-amber-200" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/10" />
+          <Badge className={cn("absolute left-3 top-3 rounded-[8px] border capitalize", statusClass[podcast.status])} variant="outline">
+            {podcast.status.replace("_", " ")}
+          </Badge>
+          {podcast.episodeNumber ? (
+            <Badge className="absolute left-3 bottom-3 rounded-[8px] border border-white/10 bg-white/5 text-xs text-gray-200" variant="outline">
+              Episode {podcast.episodeNumber}
+            </Badge>
+          ) : null}
+        </div>
+        <div className="space-y-3 p-4">
+          <div>
+            <h3 className="line-clamp-2 text-lg font-semibold text-white">{podcast.title}</h3>
+            <p className="mt-1 text-xs uppercase tracking-[0.16em] text-gray-500">
+              {podcast.language ?? "Podcast"} / {formatDate(podcast.updatedAt ?? podcast.createdAt)}
+            </p>
           </div>
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/10" />
-        <Badge className={cn("absolute left-3 top-3 rounded-[8px] border capitalize", statusClass[podcast.status])} variant="outline">
-          {podcast.status.replace("_", " ")}
-        </Badge>
-      </div>
-      <div className="space-y-3 p-4">
-        <div>
-          <h3 className="line-clamp-2 text-lg font-semibold text-white">{podcast.title}</h3>
-          <p className="mt-1 text-xs uppercase tracking-[0.16em] text-gray-500">
-            {podcast.language ?? "Podcast"} / {formatDate(podcast.updatedAt ?? podcast.createdAt)}
-          </p>
+          <div className="flex items-center justify-between text-sm text-gray-400">
+            <span>{formatDuration(podcast.durationSeconds)}</span>
+            <span className="text-amber-200">
+              {podcast.status === "completed" ? "View result" : podcast.status === "failed" ? "Retry" : "Continue"}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center justify-between text-sm text-gray-400">
-          <span>{formatDuration(podcast.durationSeconds)}</span>
-          <span className="text-amber-200">
-            {podcast.status === "completed" ? "View result" : podcast.status === "failed" ? "Retry" : "Continue"}
-          </span>
-        </div>
+      </Link>
+      <div className="absolute right-3 top-3 z-10 flex gap-2">
+        <button
+          type="button"
+          onClick={() => onEdit(podcast)}
+          className="rounded-[6px] border border-white/10 bg-white/10 p-1 text-white hover:bg-white/20"
+          aria-label="Edit podcast"
+        >
+          <Pencil className="size-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => onDelete(podcast.id)}
+          className="rounded-[6px] border border-red-300/30 bg-red-500/10 p-1 text-red-200 hover:bg-red-500/20"
+          aria-label="Delete podcast"
+        >
+          <Trash2 className="size-4" />
+        </button>
       </div>
-    </Link>
+    </div>
   );
 }

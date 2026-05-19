@@ -18,18 +18,16 @@ import { cn } from "@/lib/utils";
 import type { GenerationJob, JobStage, StageProgress } from "@/types/jobs";
 
 const stageLabels: Record<JobStage, string> = {
-  audio: "Preparing Audio",
-  lipsync: "Generating Avatar Video",
-  movement: "Polishing Motion",
-  compose: "Composing Final Cut",
-  export: "Exporting MP4",
+  script: "Script Ready",
+  audio: "Generating Dialogue",
+  merge: "Merging Podcast",
+  export: "Exporting MP3",
 };
 
 const stageDescriptions: Record<JobStage, string> = {
-  audio: "Unreal Speech is creating clean MP3 dialogue.",
-  lipsync: "HeyGen is rendering each avatar turn.",
-  movement: "Scene timing and visual polish are being checked.",
-  compose: "Clips are being stitched into one episode.",
+  script: "The host and guest turns are locked for this run.",
+  audio: "Text-to-speech is creating each spoken turn.",
+  merge: "Host and guest clips are being stitched into one MP3.",
   export: "The final Cloudinary download link is being prepared.",
 };
 
@@ -39,7 +37,7 @@ const fallbackProgress: StageProgress = {
 };
 
 const friendlyError =
-  "AI is busy right now. Retry will keep your same topic, voices, and studio settings.";
+  "AI is busy right now. Retry will keep your same topic, script, and voices.";
 
 const formatEta = (job: GenerationJob | null) => {
   if (!job || job.status === "completed") {
@@ -100,7 +98,7 @@ export function GenerationJobTracker({
                 className="h-10 rounded-[8px] bg-amber-300 text-sm font-semibold text-gray-950 hover:bg-amber-200"
               >
                 {busyAction === "retry" ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-                Retry render
+                Retry audio
               </Button>
             ) : null}
             <Button
@@ -127,7 +125,7 @@ export function GenerationJobTracker({
         ) : null}
 
         {jobStages.map((stage) => {
-          const stageProgress = job?.stages[stage] ?? fallbackProgress;
+          const stageProgress = job?.stages?.[stage] ?? fallbackProgress;
           const progress = Math.min(100, Math.max(0, Math.round(stageProgress.progress)));
           const active = activeStage === stage && job?.status === "running";
           const failed = stageProgress.status === "failed" || (job?.status === "failed" && activeStage === stage);

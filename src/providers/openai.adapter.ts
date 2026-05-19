@@ -84,7 +84,7 @@ const buildPrompt = ({ existingScript, podcast, segmentId }: GenerateScriptInput
     ? `Regenerate only segment ${segmentId}. Return the full script JSON with the regenerated segment replaced and all other segments preserved unless continuity requires tiny bridge edits.`
     : "Generate the full script from scratch.";
 
-  return `You are an expert podcast scriptwriter for realistic AI-hosted video podcasts.
+  return `You are an expert podcast scriptwriter for realistic AI-hosted audio podcasts.
 Return only valid JSON matching this TypeScript shape:
 {
   "id": string,

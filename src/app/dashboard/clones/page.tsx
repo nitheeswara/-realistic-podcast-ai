@@ -8,7 +8,6 @@ import {
   AudioLines,
   Calendar,
   ExternalLink,
-  ImageIcon,
   Loader2,
   Mic2,
   Trash2,
@@ -158,7 +157,7 @@ export default function ClonesPage() {
         throw new Error("Clone library returned an unexpected response.");
       }
 
-      setClones(parsed.data.clones);
+      setClones(parsed.data.clones.filter((clone) => clone.type === "voice"));
     } catch (error) {
       setClonesError(error instanceof Error ? error.message : "Clone library unavailable.");
     } finally {
@@ -244,7 +243,6 @@ export default function ClonesPage() {
   const groupedCounts = useMemo(
     () => ({
       voices: clones.filter((clone) => clone.type === "voice").length,
-      avatars: clones.filter((clone) => clone.type === "avatar").length,
     }),
     [clones]
   );
@@ -283,13 +281,12 @@ export default function ClonesPage() {
             <div>
               <h1 className="text-4xl font-semibold tracking-tight md:text-5xl">Your cloned assets</h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-gray-400">
-                Keep approved voices and avatars ready for any episode cast.
+                Keep approved voices ready for any episode cast.
               </p>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3">
             <MetricPill icon={Mic2} label="Voice clones" value={groupedCounts.voices} />
-            <MetricPill icon={ImageIcon} label="Avatar clones" value={groupedCounts.avatars} />
           </div>
         </motion.header>
 
@@ -314,7 +311,7 @@ export default function ClonesPage() {
                 <div className="space-y-2">
                   <h2 className="text-2xl font-semibold text-white">No clones yet</h2>
                   <p className="max-w-md text-sm leading-6 text-gray-400">
-                    Add a cloned voice or avatar from a podcast cast screen, then reuse it here.
+                    Add a cloned voice from a podcast voice screen, then reuse it here.
                   </p>
                 </div>
                 <Button asChild className="mt-2 h-11 rounded-[8px] bg-amber-300 px-5 text-sm font-semibold text-gray-950 hover:bg-amber-200">
@@ -351,7 +348,7 @@ export default function ClonesPage() {
           <DialogHeader className="border-b border-white/10 px-5 py-4">
             <DialogTitle className="text-lg text-white">Use this clone</DialogTitle>
             <DialogDescription className="text-sm text-gray-400">
-              Pick an episode and finish the host or guest assignment in the cast screen.
+              Pick an episode and finish the host or guest assignment in voice selection.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 px-5 pb-5">
@@ -389,8 +386,8 @@ export default function ClonesPage() {
                       asChild
                       className="h-9 rounded-[8px] bg-amber-300 px-3 text-xs font-semibold text-gray-950 hover:bg-amber-200"
                     >
-                      <Link href={`/dashboard/podcasts/${podcast.id}/voice-avatar`}>
-                        Open cast
+                      <Link href={`/dashboard/podcasts/${podcast.id}/voice`}>
+                        Open voices
                         <ExternalLink className="size-3.5" />
                       </Link>
                     </Button>
@@ -440,8 +437,7 @@ function CloneCard({
   onDelete: () => void;
   onUse: () => void;
 }) {
-  const isVoice = clone.type === "voice";
-  const Icon = isVoice ? Mic2 : ImageIcon;
+  const Icon = Mic2;
   const previewImage = clone.previewImageUrl;
   const previewAudio = clone.previewUrl;
 

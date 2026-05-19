@@ -21,6 +21,7 @@ export interface PodcastScript {
   id: string;
   podcastId: string;
   title: string;
+  language?: string;
   hook?: string;
   segments: ScriptSegment[];
   totalEstimatedDurationSeconds?: number;

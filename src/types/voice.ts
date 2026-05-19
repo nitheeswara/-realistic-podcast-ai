@@ -1,5 +1,3 @@
-import type { Avatar, AvatarMode } from "@/types/avatar";
-
 export type VoiceMode = "ai_stock" | "ai_premium" | "cloned";
 export type SpeakerRole = "host" | "guest";
 export type SpeakerGender = "male" | "female";
@@ -7,7 +5,7 @@ export type SpeakerGender = "male" | "female";
 export interface Voice {
   id: string;
   name: string;
-  provider: "elevenlabs" | "sarvam" | "gemini" | "openai" | "custom";
+  provider: "unrealspeech" | "elevenlabs" | "sarvam" | "gemini" | "openai" | "custom";
   mode: VoiceMode;
   gender: SpeakerGender;
   languageCode: string;
@@ -26,11 +24,5 @@ export interface SpeakerConfig {
   voice?: Voice;
   clonedVoiceId?: string;
   clonedVoiceName?: string;
-  avatarMode?: AvatarMode;
-  avatarId?: string;
-  avatar?: Avatar;
-  clonedAvatarId?: string;
-  clonedAvatarName?: string;
-  clonedAvatarPreviewUrl?: string;
   speakingStyle?: string;
 }

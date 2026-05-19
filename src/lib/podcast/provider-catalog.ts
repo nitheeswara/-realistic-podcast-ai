@@ -1,4 +1,3 @@
-import type { Avatar } from "@/types/avatar";
 import type { SpeakerGender, Voice } from "@/types/voice";
 
 export const SARVAM_LANGS = [
@@ -124,18 +123,3 @@ export const normalizeVoiceMode = (category: unknown): Voice["mode"] => {
     ? "ai_premium"
     : "ai_stock";
 };
-
-export const normalizeHeyGenAvatar = (avatar: {
-  id: string;
-  name: string;
-  gender?: string;
-  previewImage?: string;
-}): Avatar => ({
-  id: avatar.id,
-  name: avatar.name,
-  provider: "heygen",
-  mode: "stock",
-  gender: normalizeSpeakerGender(avatar.gender, "female"),
-  previewImageUrl: avatar.previewImage,
-  externalAvatarId: avatar.id,
-});

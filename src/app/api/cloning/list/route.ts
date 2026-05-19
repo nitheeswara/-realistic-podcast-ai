@@ -18,7 +18,7 @@ export async function GET(request: Request) {
         ...(documentSnapshot.data() as Record<string, unknown>),
       })
     );
-    const clones = cloneDocs.sort((first, second) => {
+    const clones = cloneDocs.filter((clone) => clone.type === "voice").sort((first, second) => {
       const firstCreated = typeof first.createdAt === "string" ? first.createdAt : "";
       const secondCreated = typeof second.createdAt === "string" ? second.createdAt : "";
       return secondCreated.localeCompare(firstCreated);

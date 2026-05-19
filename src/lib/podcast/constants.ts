@@ -1,7 +1,4 @@
-import type { Avatar } from "@/types/avatar";
-import type { JobStage } from "@/types/jobs";
 import type { PodcastFormat, PodcastLanguage } from "@/types/podcast";
-import type { AspectRatio, CameraStyle, StudioBackground, SubtitleStyle } from "@/types/video";
 import type { Voice, VoiceMode } from "@/types/voice";
 
 export const podcastFormatOptions = [
@@ -59,12 +56,13 @@ export const languageOptions = [
 }>;
 
 export const jobStages = [
+  "script",
   "audio",
-  "lipsync",
-  "movement",
-  "compose",
+  "merge",
   "export",
-] as const satisfies ReadonlyArray<JobStage>;
+] as const;
+
+export type JobStage = typeof jobStages[number];
 
 export const voiceModeOptions = [
   { value: "ai_stock", label: "AI Stock" },
@@ -137,104 +135,5 @@ export const voiceOptions = [
     externalVoiceId: "21m00Tcm4TlvDq8ikWAM",
   },
 ] as const satisfies ReadonlyArray<Voice>;
-
-export const avatarOptions = [
-  {
-    id: "heygen-host-male-1",
-    name: "Aarav",
-    provider: "heygen",
-    mode: "stock",
-    gender: "male",
-    previewImageUrl:
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=420&q=80",
-    externalAvatarId: "Aarav_public_001",
-  },
-  {
-    id: "heygen-host-female-1",
-    name: "Maya",
-    provider: "heygen",
-    mode: "stock",
-    gender: "female",
-    previewImageUrl:
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=420&q=80",
-    externalAvatarId: "Maya_public_001",
-  },
-  {
-    id: "heygen-guest-male-1",
-    name: "Dev",
-    provider: "heygen",
-    mode: "stock",
-    gender: "male",
-    previewImageUrl:
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=420&q=80",
-    externalAvatarId: "Dev_public_001",
-  },
-  {
-    id: "heygen-guest-female-1",
-    name: "Leah",
-    provider: "heygen",
-    mode: "stock",
-    gender: "female",
-    previewImageUrl:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=420&q=80",
-    externalAvatarId: "Leah_public_001",
-  },
-] as const satisfies ReadonlyArray<Avatar>;
-
-export const backgroundOptions = [
-  {
-    value: "midnight",
-    label: "Midnight Desk",
-    imageUrl:
-      "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=480&q=80",
-  },
-  {
-    value: "newsroom",
-    label: "Newsroom",
-    imageUrl:
-      "https://images.unsplash.com/photo-1589903308904-1010c2294adc?auto=format&fit=crop&w=480&q=80",
-  },
-  {
-    value: "warm_studio",
-    label: "Warm Studio",
-    imageUrl:
-      "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?auto=format&fit=crop&w=480&q=80",
-  },
-  {
-    value: "city",
-    label: "City Glass",
-    imageUrl:
-      "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=480&q=80",
-  },
-] as const satisfies ReadonlyArray<{
-  value: StudioBackground;
-  label: string;
-  imageUrl: string;
-}>;
-
-export const cameraStyleOptions = [
-  {
-    value: "locked",
-    label: "Locked Frame",
-    description: "Stable desk camera with subtle breathing room.",
-  },
-  {
-    value: "push_in",
-    label: "Slow Push",
-    description: "Gentle emphasis on key moments and turns.",
-  },
-  {
-    value: "two_shot",
-    label: "Two Shot Cuts",
-    description: "Host and guest coverage with clean reactions.",
-  },
-] as const satisfies ReadonlyArray<{
-  value: CameraStyle;
-  label: string;
-  description: string;
-}>;
-
-export const subtitleStyles = ["minimal", "karaoke", "podcast"] as const satisfies ReadonlyArray<SubtitleStyle>;
-export const aspectRatios = ["16:9", "9:16", "1:1"] as const satisfies ReadonlyArray<AspectRatio>;
 
 
